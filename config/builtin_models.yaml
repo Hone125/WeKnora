@@ -5,6 +5,14 @@
 #   - embedding 模型：BAAI/bge-m3（向量化，1024 维）
 # 真实 API key 从 .env 读取（LLM_API_KEY / EMBEDDING_API_KEY），不写进本文件。
 # 改动后重启应用即生效。
+#
+# pricing（每百万 token 单价，CNY）来源：SiliconFlow 公开定价（2026-08 查询），
+# 用于课题三 M2「成本可观测」的费用计算（账本只存 token 量，费用按此单价即时计算）。
+#   - DeepSeek-V3 标准版实时推理：输入 2 元、输出 8 元、缓存读取 0.2 元 / 1M token
+#     （cached_input 对应「前缀缓存命中」的读取价，比普通输入便宜 10 倍——
+#       这正是 M3② prompt 重排蹭厂商前缀缓存能省钱的原因）
+#   - bge-m3：按 Pro 版 0.07 元 / 1M token 保守填写（标准版或有免费额度）
+# 价格为查询时点快照，会随活动/版本变动，以 SiliconFlow 官方为准。
 
 builtin_models:
   - id: builtin-llm-default
@@ -16,6 +24,11 @@ builtin_models:
       base_url: ${LLM_BASE_URL}
       api_key: ${LLM_API_KEY}
       provider: openai
+      pricing:
+        currency: CNY
+        input_per_million: 2
+        output_per_million: 8
+        cached_input_per_million: 0.2
 
   - id: builtin-embedding-default
     type: Embedding
@@ -29,3 +42,6 @@ builtin_models:
       embedding_parameters:
         dimension: 1024
         truncate_prompt_tokens: 0
+      pricing:
+        currency: CNY
+        input_per_million: 0.07
