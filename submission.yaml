@@ -1,0 +1,15 @@
+version: 1
+student:
+  name: "刘玉良"
+  github_id: "Hone125"
+topic:
+  id: "3"
+  title: "质量评测基线与成本可观测"
+result:
+  type: code
+  url: "https://github.com/Hone125/WeKnora"
+repository:
+  url: "https://github.com/Hone125/WeKnora"
+  branch: "rhino-topic3"
+  commit: "aa9ced3171f58f42893ae58b293591cbb8c195a3"
+  tag: "rhino-2026-final-3"
