@@ -98,6 +98,9 @@ func NewEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 	// pool callbacks) before debug/langfuse wrap for logging/tracing. See
 	// concurrencyEmbedder for why this sits below the observability decorators.
 	e = wrapEmbeddingConcurrency(e, config.MaxConcurrency)
+	// Cache wraps OUTSIDE the concurrency gate so a cache hit short-circuits
+	// without consuming provider concurrency quota. See cache.go.
+	e = wrapEmbeddingCache(e)
 	if logger.LLMDebugEnabled() {
 		e = &debugEmbedder{inner: e}
 	}

@@ -56,6 +56,17 @@ type EvaluationDetail struct {
 	Task   *EvaluationTask `json:"task"`             // Evaluation task info
 	Params *ChatManage     `json:"params"`           // Evaluation parameters
 	Metric *MetricResult   `json:"metric,omitempty"` // Evaluation metrics
+	Cost   *EvaluationCost `json:"cost,omitempty"`   // Model-call cost and latency
+}
+
+// EvaluationCost 记录一次评测累计的模型调用 token 用量与总耗时，
+// 是"四类结果"中的成本、耗时两类。费用（金额）在 M2 引入模型定价后，
+// 由 token 用量 × 单价计算得到，此处先记录原始用量以保证可复现。
+type EvaluationCost struct {
+	PromptTokens     int64 `json:"prompt_tokens"`     // 累计输入 token
+	CompletionTokens int64 `json:"completion_tokens"` // 累计输出 token
+	TotalTokens      int64 `json:"total_tokens"`      // 累计总 token
+	LatencyMs        int64 `json:"latency_ms"`        // 评测总耗时（毫秒）
 }
 
 // String returns JSON representation of EvaluationTask

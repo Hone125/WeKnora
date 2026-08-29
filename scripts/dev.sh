@@ -512,7 +512,15 @@ start_app() {
     log_info "环境变量已设置，启动应用..."
     log_info "数据库地址: $DB_HOST:${DB_PORT:-5432}"
     
-    export CGO_CFLAGS="-Wno-deprecated-declarations -Wno-gnu-folding-constant"
+    # Windows 原生编译（MinGW）无系统 libsqlite3-dev，sqlite-vec 的 CGO 绑定
+    # 需要 sqlite3.h。仓库 third_party/sqlite 提供 SQLite amalgamation 头文件，
+    # 通过 -I 注入 include path。MinGW gcc 需要 Windows 风格路径（C:/...），
+    # 用 cygpath 转换；Linux/macOS 无 cygpath 时回退为 POSIX 路径。
+    SQLITE_INCLUDE_DIR="$PROJECT_ROOT/third_party/sqlite"
+    if command -v cygpath >/dev/null 2>&1; then
+        SQLITE_INCLUDE_DIR="$(cygpath -m "$SQLITE_INCLUDE_DIR")"
+    fi
+    export CGO_CFLAGS="-Wno-deprecated-declarations -Wno-gnu-folding-constant -I$SQLITE_INCLUDE_DIR"
     if [[ "$(uname)" == "Darwin" ]]; then
       export CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries"
     fi

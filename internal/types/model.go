@@ -22,6 +22,17 @@ const (
 	ModelTypeASR         ModelType = "ASR"         // ASR (Automatic Speech Recognition) model
 )
 
+// ModelPricing 描述一个模型按每百万 token 计费的单价（可空）。
+// 费用在「模型成本可观测」（课题三 M2）中按 token 用量 × 单价计算，
+// 账本（model_usages）只存 token 量、不存金额，避免价格变动导致历史金额失真。
+// 三档中 cached_input_per_million 为空时，读取端回落 input_per_million。
+type ModelPricing struct {
+	Currency              string  `yaml:"currency"                 json:"currency"`                            // 货币单位，如 CNY / USD
+	InputPerMillion       float64 `yaml:"input_per_million"        json:"input_per_million"`                 // 输入 token 每 1M 单价
+	OutputPerMillion      float64 `yaml:"output_per_million"       json:"output_per_million"`                // 输出 token 每 1M 单价
+	CachedInputPerMillion float64 `yaml:"cached_input_per_million" json:"cached_input_per_million,omitempty"` // 缓存命中输入 token 每 1M 单价，空则回落 input
+}
+
 // ModelStatus represents the status of the model
 type ModelStatus string
 
@@ -85,6 +96,8 @@ type ModelParameters struct {
 	// WeKnoraCloud 厂商专用凭证
 	AppID     string `yaml:"app_id,omitempty"     json:"app_id,omitempty"`
 	AppSecret string `yaml:"app_secret,omitempty" json:"app_secret,omitempty"` // AES-256 加密存储，实际承载上游 API Key
+	// Pricing 按每百万 token 计费的单价（可空）。见 ModelPricing。
+	Pricing *ModelPricing `yaml:"pricing,omitempty" json:"pricing,omitempty"`
 }
 
 // Per-response redaction for Model now lives in dto.NewModelResponse. The

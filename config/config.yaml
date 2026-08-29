@@ -9,7 +9,7 @@ server:
 conversation:
   max_rounds: 5
   keyword_threshold: 0.3
-  embedding_top_k: 30
+  embedding_top_k: 5
   vector_threshold: 0.2
   rerank_threshold: 0.3
   rerank_top_k: 30

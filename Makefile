@@ -1,4 +1,4 @@
-.PHONY: help build run test clean docker-build-app docker-build-docreader docker-build-frontend docker-build-all docker-run migrate-up migrate-down docker-restart docker-stop start-all stop-all start-ollama stop-ollama build-images build-images-app build-images-docreader build-images-frontend clean-images check-env list-containers pull-images show-platform dev-start dev-stop dev-restart dev-logs dev-status dev-app dev-frontend docs install-swagger build-lite run-lite package-lite anydoc-lib build-anydoc
+.PHONY: help build run test clean docker-build-app docker-build-docreader docker-build-frontend docker-build-all docker-run migrate-up migrate-down docker-restart docker-stop start-all stop-all start-ollama stop-ollama build-images build-images-app build-images-docreader build-images-frontend clean-images check-env list-containers pull-images show-platform dev-start dev-stop dev-restart dev-logs dev-status dev-app dev-frontend docs install-swagger build-lite run-lite package-lite anydoc-lib build-anydoc eval
 
 # Show help
 help:
@@ -89,6 +89,16 @@ endif
 # Build the application
 build:
 	go build -o $(BINARY_NAME) $(MAIN_PATH)
+
+# 评测一条命令复现（课题三 M1）：登录 → 触发评测 → 轮询 → 输出四类结果报告
+# 前置：后端已运行（make dev-app），.env 已配置模型 Key。可选 DATASET=xxx 指定数据集。
+eval:
+	@bash scripts/eval.sh $(DATASET)
+
+# 质量门禁（课题三 M4）：跑一次评测 → 对比 eval_gate.json 基线阈值 → 输出判定 + 退出码
+# 前置：后端已运行（make dev-app），.env 已配置模型 Key。可选 DATASET=xxx 指定数据集。
+eval-gate:
+	@bash scripts/eval-gate.sh $(DATASET)
 
 # Build the anydoc static archive (Rust) that the `anydoc` build tag links.
 # Override the platform with TARGET=<rust-target-triple>.

@@ -87,6 +87,7 @@ type HookMetric struct {
 	qaPairMetricList []*qaPairMetric // Per-QA pair metrics
 	metricResults    *MetricList     // Aggregated results
 	mu               *sync.RWMutex   // Thread safety
+	allPassages      []string        // 全量语料段落，按 passage ID 索引（索引即 pid），用于把检索 chunk 映射回 pid
 }
 
 // qaPairMetric stores metrics for a single QA pair
@@ -97,12 +98,15 @@ type qaPairMetric struct {
 	chatResponse *types.ChatResponse
 }
 
-// NewHookMetric creates a new HookMetric with given capacity
-func NewHookMetric(capacity int) *HookMetric {
+// NewHookMetric creates a new HookMetric with given capacity.
+// allPassages 是全量语料段落（按 passage ID 索引），用于把检索到的 chunk 映射回原始段落 ID，
+// 从而在完整检索结果上计算检索指标（而非只针对该问题的相关段落）。
+func NewHookMetric(capacity int, allPassages []string) *HookMetric {
 	return &HookMetric{
 		metricResults:    &MetricList{},
 		qaPairMetricList: make([]*qaPairMetric, capacity),
 		mu:               &sync.RWMutex{},
+		allPassages:      allPassages,
 	}
 }
 
@@ -151,12 +155,14 @@ func (h *HookMetric) recordFinish(index int) {
 		if r.Content == "" {
 			continue
 		}
-		for i, passage := range qaPair.Passages {
+		// 在「全量语料」上做内容匹配，把检索到的 chunk 映射回它来自的段落 ID。
+		// 注意：不能只用 qaPair.Passages（那只是该问题的相关段落），否则检索到的
+		// 无关 chunk 会被全部丢弃，导致 retrievalIDs 退化成只有相关段落、指标恒为满分。
+		for pid, passage := range h.allPassages {
 			if passage == "" {
 				continue
 			}
 			if strings.Contains(passage, r.Content) || strings.Contains(r.Content, passage) {
-				pid := qaPair.PIDs[i]
 				if _, ok := seen[pid]; !ok {
 					seen[pid] = struct{}{}
 					retrievalIDs = append(retrievalIDs, pid)

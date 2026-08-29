@@ -45,6 +45,42 @@
       <t-tab-panel value="asr" :label="`${$t('modelSettings.typeShort.asr')}(${countByType('asr')})`" />
     </t-tabs>
 
+    <!-- 模型用量与成本概览（课题三 M2 成本可观测） -->
+    <section class="usage-panel" data-guide="settings-model-usage">
+      <div class="usage-panel__header">
+        <div>
+          <h3 class="usage-panel__title">模型用量与成本</h3>
+          <p class="usage-panel__subtitle">最近 7 天的调用量、缓存命中率与费用（费用按模型当前定价即时计算）</p>
+        </div>
+        <t-button variant="outline" size="small" :loading="usageLoading" @click="loadUsage">
+          <template #icon><t-icon name="refresh" /></template>
+          刷新
+        </t-button>
+      </div>
+
+      <t-loading :loading="usageLoading" size="small">
+        <p v-if="usageError" class="usage-panel__error">{{ usageError }}</p>
+        <t-table
+          v-else-if="usageRows.length > 0"
+          :data="usageRows"
+          :columns="usageColumns"
+          row-key="model_id"
+          size="small"
+          :bordered="false"
+          hover
+          class="usage-table"
+        >
+          <template #model_type="{ row }">{{ usageTypeLabel(row.model_type) }}</template>
+          <template #call_count="{ row }">{{ formatTokens(row.call_count) }}</template>
+          <template #prompt_tokens="{ row }">{{ formatTokens(row.prompt_tokens) }}</template>
+          <template #completion_tokens="{ row }">{{ formatTokens(row.completion_tokens) }}</template>
+          <template #cache_hit_rate="{ row }">{{ formatHitRate(row.cache_hit_rate) }}</template>
+          <template #cost="{ row }">{{ formatCost(row.cost, row.currency) }}</template>
+        </t-table>
+        <t-empty v-else description="暂无模型调用记录" size="small" class="usage-panel__empty" />
+      </t-loading>
+    </section>
+
     <t-loading :loading="loading" size="small" class="model-list-loading">
       <div v-if="!loading && filteredModels.length === 0 && !authStore.hasRole('admin')" class="empty-state">
         <t-empty :description="emptyHint" />
@@ -147,7 +183,7 @@ import { AddIcon, PlayCircleIcon } from 'tdesign-icons-vue-next'
 import { useI18n } from 'vue-i18n'
 import ModelEditorDialog from '@/components/ModelEditorDialog.vue'
 import ModelDebugDrawer from '@/components/ModelDebugDrawer.vue'
-import { listModels, createModel, updateModel as updateModelAPI, deleteModel as deleteModelAPI, type ModelConfig } from '@/api/model'
+import { listModels, createModel, updateModel as updateModelAPI, deleteModel as deleteModelAPI, getModelUsage, type ModelConfig, type ModelUsageAggregate } from '@/api/model'
 import { useAuthStore } from '@/stores/auth'
 import { useUIStore } from '@/stores/ui'
 
@@ -177,6 +213,11 @@ watch(
 
 // 模型列表数据
 const allModels = ref<ModelConfig[]>([])
+
+// 模型用量与成本（M2 成本可观测）
+const usageLoading = ref(false)
+const usageRows = ref<ModelUsageAggregate[]>([])
+const usageError = ref('')
 
 // 后端 type → 前端分组 type 的映射
 const backendTypeToModelType: Record<string, ModelType> = {
@@ -320,6 +361,62 @@ const loadModels = async () => {
     loading.value = false
   }
 }
+
+// 加载模型用量与成本概览（默认最近 7 天）
+const loadUsage = async () => {
+  usageLoading.value = true
+  usageError.value = ''
+  try {
+    usageRows.value = await getModelUsage()
+  } catch (error: any) {
+    usageError.value = error?.message || '加载成本数据失败'
+  } finally {
+    usageLoading.value = false
+  }
+}
+
+// 千分位格式化
+const formatTokens = (n: number): string => {
+  if (n == null || Number.isNaN(n)) return '0'
+  return Number(n).toLocaleString('zh-CN')
+}
+
+// 缓存命中率 0~1 → 百分比字符串
+const formatHitRate = (rate: number): string => {
+  if (rate == null || Number.isNaN(rate)) return '—'
+  return `${(rate * 100).toFixed(1)}%`
+}
+
+// 费用格式化：保留 4 位小数（单价按每百万 token 计，单次聚合金额通常很小）
+const formatCost = (cost: number, currency: string): string => {
+  if (cost == null || Number.isNaN(cost)) return '—'
+  const num = Number(cost)
+  const fixed = num >= 1 ? num.toFixed(2) : num.toFixed(4)
+  return `${fixed} ${currency || ''}`.trim()
+}
+
+// 后端 model_type → 前端展示文案
+const usageTypeLabel = (mt: string): string => {
+  const map: Record<string, string> = {
+    chat: t('modelSettings.typeShort.chat'),
+    embedding: t('modelSettings.typeShort.embedding'),
+    rerank: t('modelSettings.typeShort.rerank'),
+    vllm: t('modelSettings.typeShort.vllm'),
+    asr: t('modelSettings.typeShort.asr'),
+  }
+  return map[mt] || mt
+}
+
+// 成本概览表格列定义
+const usageColumns = [
+  { colKey: 'model_name', title: '模型', width: 200, ellipsis: true },
+  { colKey: 'model_type', title: '类型', width: 110 },
+  { colKey: 'call_count', title: '调用次数', width: 100, align: 'right' as const },
+  { colKey: 'prompt_tokens', title: '输入 Tokens', width: 120, align: 'right' as const },
+  { colKey: 'completion_tokens', title: '输出 Tokens', width: 120, align: 'right' as const },
+  { colKey: 'cache_hit_rate', title: '缓存命中率', width: 110, align: 'right' as const },
+  { colKey: 'cost', title: '费用', width: 120, align: 'right' as const },
+]
 
 // 打开添加对话框；类型在抽屉内选择，此处仅按当前 Tab 预填默认值
 const openAddDialog = () => {
@@ -615,6 +712,7 @@ function getModelType(type: ModelType): 'KnowledgeQA' | 'Embedding' | 'Rerank' |
 
 onMounted(() => {
   loadModels()
+  loadUsage()
 })
 </script>
 
@@ -984,6 +1082,58 @@ onMounted(() => {
     font-size: 14px;
     color: var(--td-text-color-placeholder);
     margin-bottom: 16px;
+  }
+}
+
+// 模型用量与成本概览（M2 成本可观测）
+.usage-panel {
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 10px;
+}
+
+.usage-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.usage-panel__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.usage-panel__subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  line-height: 1.5;
+}
+
+.usage-panel__error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--td-error-color);
+}
+
+.usage-panel__empty {
+  padding: 24px 0;
+}
+
+.usage-table {
+  :deep(.t-table__header th) {
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
+  }
+
+  :deep(.t-table__body td) {
+    font-size: 13px;
   }
 }
 </style>

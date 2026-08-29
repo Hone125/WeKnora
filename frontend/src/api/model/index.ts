@@ -187,6 +187,46 @@ export async function debugModel(
 }
 
 // ----------------------------------------------------------------------------
+// 模型用量与成本（课题三 M2 成本可观测）。数据来自 GET /api/v1/models/usage，
+// 由后端按模型聚合调用量/缓存命中率/费用（费用按模型当前定价即时计算）。
+// ----------------------------------------------------------------------------
+
+export interface ModelUsageAggregate {
+  model_id: string;
+  model_name: string;
+  model_type: string;
+  call_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_tokens: number;
+  cache_hit_rate: number; // 0~1
+  cost: number;
+  currency: string;
+}
+
+export function getModelUsage(start?: string, end?: string): Promise<ModelUsageAggregate[]> {
+  return new Promise((resolve, reject) => {
+    const params = new URLSearchParams();
+    if (start) params.append('start', start);
+    if (end) params.append('end', end);
+    const qs = params.toString();
+    get(`/api/v1/models/usage${qs ? `?${qs}` : ''}`)
+      .then((response: any) => {
+        if (response.success && Array.isArray(response.data)) {
+          resolve(response.data);
+        } else {
+          resolve([]);
+        }
+      })
+      .catch((error: any) => {
+        console.error('Failed to get model usage:', error);
+        reject(error);
+      });
+  });
+}
+
+// ----------------------------------------------------------------------------
 // Model credential subresource. See mcp-service.ts for the matching MCP API
 // shape and the design notes in internal/handler/dto/mcp.go.
 // ----------------------------------------------------------------------------

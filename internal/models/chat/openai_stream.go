@@ -119,7 +119,7 @@ func (c *RemoteAPIChat) processStream(
 		response, err := stream.Recv()
 		if err != nil {
 			if err == io.EOF {
-				logUsage(ctx, c.modelName, state.usage)
+				logUsage(ctx, c.modelID, c.modelName, state.usage)
 				toolCalls := state.buildOrderedToolCalls()
 				streamChan <- types.StreamResponse{
 					ResponseType: types.ResponseTypeAnswer,
@@ -171,7 +171,7 @@ func (c *RemoteAPIChat) processRawHTTPStream(
 		event, err := reader.ReadEvent()
 		if err != nil {
 			if err == io.EOF {
-				logUsage(ctx, c.modelName, state.usage)
+				logUsage(ctx, c.modelID, c.modelName, state.usage)
 				toolCalls := state.buildOrderedToolCalls()
 				streamChan <- types.StreamResponse{
 					ResponseType: types.ResponseTypeAnswer,
@@ -196,7 +196,7 @@ func (c *RemoteAPIChat) processRawHTTPStream(
 		}
 
 		if event.Done {
-			logUsage(ctx, c.modelName, state.usage)
+			logUsage(ctx, c.modelID, c.modelName, state.usage)
 			toolCalls := state.buildOrderedToolCalls()
 			streamChan <- types.StreamResponse{
 				ResponseType: types.ResponseTypeAnswer,

@@ -166,7 +166,7 @@ func (c *OllamaChat) Chat(ctx context.Context, messages []Message, opts *ChatOpt
 		TotalTokens:      promptTokens + completionTokens,
 	}
 	usage.MarkPromptCacheUnsupported()
-	logUsage(ctx, c.modelName, &usage)
+	logUsage(ctx, c.modelID, c.modelName, &usage)
 
 	return &types.ChatResponse{
 		Content:   responseContent,
@@ -263,7 +263,7 @@ func (c *OllamaChat) ChatStream(
 					}
 					usage.MarkPromptCacheUnsupported()
 				}
-				logUsage(ctx, c.modelName, usage)
+				logUsage(ctx, c.modelID, c.modelName, usage)
 				streamChan <- types.StreamResponse{
 					ResponseType: types.ResponseTypeAnswer,
 					Done:         true,

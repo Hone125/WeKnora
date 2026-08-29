@@ -155,7 +155,7 @@ func (c *AnthropicChat) Chat(ctx context.Context, messages []Message, opts *Chat
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 			return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, chatResp.Content)
 		}
-		logUsage(ctx, c.modelName, &chatResp.Usage)
+		logUsage(ctx, c.modelID, c.modelName, &chatResp.Usage)
 		return chatResp, nil
 	}
 
@@ -171,7 +171,7 @@ func (c *AnthropicChat) Chat(ctx context.Context, messages []Message, opts *Chat
 	}
 
 	result := c.parseResponse(&chatResp)
-	logUsage(ctx, c.modelName, &result.Usage)
+	logUsage(ctx, c.modelID, c.modelName, &result.Usage)
 	return result, nil
 }
 
@@ -209,7 +209,7 @@ func (c *AnthropicChat) ChatStream(ctx context.Context, messages []Message, opts
 	}
 
 	streamChan := make(chan types.StreamResponse)
-	go processAnthropicStream(ctx, c.modelName, resp, streamChan)
+	go processAnthropicStream(ctx, c.modelID, c.modelName, resp, streamChan)
 	return streamChan, nil
 }
 
@@ -410,7 +410,7 @@ func parseAnthropicSSE(reader io.Reader) (*types.ChatResponse, error) {
 	}, nil
 }
 
-func processAnthropicStream(ctx context.Context, model string, resp *http.Response, streamChan chan types.StreamResponse) {
+func processAnthropicStream(ctx context.Context, modelID, model string, resp *http.Response, streamChan chan types.StreamResponse) {
 	defer close(streamChan)
 	defer resp.Body.Close()
 
@@ -422,7 +422,7 @@ func processAnthropicStream(ctx context.Context, model string, resp *http.Respon
 		event, err := sseReader.ReadEvent()
 		if err != nil {
 			if err == io.EOF {
-				logUsage(ctx, model, usage)
+				logUsage(ctx, modelID, model, usage)
 				streamChan <- types.StreamResponse{
 					ResponseType: types.ResponseTypeAnswer,
 					Content:      "",
@@ -440,7 +440,7 @@ func processAnthropicStream(ctx context.Context, model string, resp *http.Respon
 			return
 		}
 		if event.Done {
-			logUsage(ctx, model, usage)
+			logUsage(ctx, modelID, model, usage)
 			streamChan <- types.StreamResponse{
 				ResponseType: types.ResponseTypeAnswer,
 				Content:      "",

@@ -33,3 +33,15 @@ type DatasetService interface {
 	// GetDatasetByID retrieves QA pairs from dataset by ID
 	GetDatasetByID(ctx context.Context, datasetID string) ([]*types.QAPair, error)
 }
+
+// EvaluationRepository defines persistence operations for evaluation tasks.
+type EvaluationRepository interface {
+	// Create creates a new evaluation task record.
+	Create(ctx context.Context, record *types.EvaluationTaskRecord) error
+	// Update updates an existing evaluation task record.
+	Update(ctx context.Context, record *types.EvaluationTaskRecord) error
+	// GetByID retrieves an evaluation task record by task ID (tenant-scoped).
+	GetByID(ctx context.Context, tenantID uint64, taskID string) (*types.EvaluationTaskRecord, error)
+	// List lists all evaluation task records for a tenant, newest first.
+	List(ctx context.Context, tenantID uint64) ([]*types.EvaluationTaskRecord, error)
+}

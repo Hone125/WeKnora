@@ -180,6 +180,9 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(repository.NewMemoryRepository))
 	must(container.Provide(repository.NewTaskPendingOpsRepository))
 	must(container.Provide(repository.NewTaskDeadLetterRepository))
+	must(container.Provide(repository.NewEvaluationRepository))
+	must(container.Provide(repository.NewModelUsageRepository))
+	must(container.Provide(repository.NewEmbeddingCacheRepository))
 
 	// MCP manager for managing MCP client connections
 	logger.Debugf(ctx, "[Container] Registering MCP manager...")
@@ -216,6 +219,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewModelService))
 	must(container.Provide(service.NewDatasetService))
 	must(container.Provide(service.NewEvaluationService))
+	must(container.Provide(service.NewModelUsageService))
 	must(container.Provide(service.NewUserService))
 	must(container.Provide(service.NewSystemSettingService))
 	must(container.Provide(func(
@@ -404,6 +408,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(handler.NewMessageHandler))
 	must(container.Provide(handler.NewMessageSuggestionHandler))
 	must(container.Provide(handler.NewModelHandler))
+	must(container.Provide(handler.NewModelUsageHandler))
 	must(container.Provide(handler.NewSandboxConfigHandler))
 	must(container.Provide(func(
 		s *service.TenantSkillService, streams interfaces.StreamManager,
@@ -451,6 +456,8 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// local:// images that live under a tenant's configured storage PathPrefix
 	// (which is not encoded in the local:// URL).
 	must(container.Invoke(registerChatLocalImageResolver))
+	must(container.Invoke(registerChatUsageRecorder))
+	must(container.Invoke(registerEmbeddingCacheStore))
 
 	// Router configuration
 	logger.Debugf(ctx, "[Container] Registering router and starting task server...")
@@ -526,6 +533,33 @@ func registerChatLocalImageResolver(
 		}
 		return data, true
 	}
+}
+
+// registerChatUsageRecorder wires the chat package's UsageRecorder hook to the
+// model usage ledger (M2 成本可观测). logUsage forwards every chat model call's
+// token/cache breakdown here; the write is dispatched to a goroutine so the
+// cost-observability side channel never blocks the hot request path. A bounded
+// timeout guards against a stalled database; a dropped row degrades to a log
+// line rather than failing the originating request.
+func registerChatUsageRecorder(repo interfaces.ModelUsageRepository) {
+	chat.UsageRecorder = func(ctx context.Context, record *types.ModelUsageRecord) {
+		go func() {
+			recCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := repo.Record(recCtx, record); err != nil {
+				logger.Warnf(recCtx, "[Usage] 记录模型调用账本失败: %v", err)
+			}
+		}()
+	}
+}
+
+// registerEmbeddingCacheStore wires the embedding package's two-level cache
+// store hook (M3 缓存层). embedding 包是叶子依赖，不能反向 import 仓储层，
+// 故仿照 chat.UsageRecorder 的注入模式，把 DB 持久化的二级缓存实现挂到
+// embedding.CacheStore 上。进程内一级 LRU 始终生效；二级 DB 缓存的读写由
+// cacheEmbedder 旁路调用，未命中或 DB 出错都降级为真实 provider 调用。
+func registerEmbeddingCacheStore(repo interfaces.EmbeddingCacheRepository) {
+	embedding.CacheStore = repo
 }
 
 // must is a helper function for error handling

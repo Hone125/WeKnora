@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -32,6 +33,7 @@ type EvaluationService struct {
 	knowledgeService     interfaces.KnowledgeService     // Service for knowledge operations
 	sessionService       interfaces.SessionService       // Service for chat sessions
 	modelService         interfaces.ModelService         // Service for model operations
+	evaluationRepository interfaces.EvaluationRepository // Persistent storage for evaluation tasks
 
 	evaluationMemoryStorage *evaluationMemoryStorage // In-memory storage for evaluation tasks
 }
@@ -43,6 +45,7 @@ func NewEvaluationService(
 	knowledgeService interfaces.KnowledgeService,
 	sessionService interfaces.SessionService,
 	modelService interfaces.ModelService,
+	evaluationRepository interfaces.EvaluationRepository,
 ) interfaces.EvaluationService {
 	evaluationMemoryStorage := newEvaluationMemoryStorage()
 	return &EvaluationService{
@@ -52,6 +55,7 @@ func NewEvaluationService(
 		knowledgeService:        knowledgeService,
 		sessionService:          sessionService,
 		modelService:            modelService,
+		evaluationRepository:    evaluationRepository,
 		evaluationMemoryStorage: evaluationMemoryStorage,
 	}
 }
@@ -103,13 +107,24 @@ func (e *EvaluationService) EvaluationResult(ctx context.Context, taskID string)
 	logger.Info(ctx, "Start getting evaluation result")
 	logger.Infof(ctx, "Task ID: %s", taskID)
 
+	tenantID := types.MustTenantIDFromContext(ctx)
+
+	// 先查内存（运行中的任务轮询走这条快路径），查不到再回退到数据库，
+	// 这样服务重启后依然能拿到历史评测结果。
 	detail, err := e.evaluationMemoryStorage.get(taskID)
 	if err != nil {
-		logger.Errorf(ctx, "Failed to get evaluation task: %v", err)
-		return nil, err
+		logger.Infof(ctx, "Task not in memory, falling back to database: %s", taskID)
+		detail, err = e.evaluationResultFromDB(ctx, tenantID, taskID)
+		if err != nil {
+			logger.Errorf(ctx, "Failed to get evaluation task: %v", err)
+			return nil, err
+		}
+		if detail == nil {
+			return nil, errors.New("task not found")
+		}
+		return detail, nil
 	}
 
-	tenantID := types.MustTenantIDFromContext(ctx)
 	logger.Infof(
 		ctx,
 		"Checking tenant ID match, task tenant ID: %d, current tenant ID: %d",
@@ -123,6 +138,20 @@ func (e *EvaluationService) EvaluationResult(ctx context.Context, taskID string)
 
 	logger.Info(ctx, "Evaluation result retrieved successfully")
 	return detail, nil
+}
+
+// evaluationResultFromDB 从数据库读取评测任务并重建 EvaluationDetail。
+func (e *EvaluationService) evaluationResultFromDB(
+	ctx context.Context, tenantID uint64, taskID string,
+) (*types.EvaluationDetail, error) {
+	record, err := e.evaluationRepository.GetByID(ctx, tenantID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, nil
+	}
+	return recordToDetail(record), nil
 }
 
 // Evaluation starts a new evaluation task with given parameters
@@ -265,6 +294,7 @@ func (e *EvaluationService) Evaluation(ctx context.Context,
 			Status:    types.EvaluationStatuePending,
 			StartTime: time.Now(),
 		},
+		Cost: &types.EvaluationCost{},
 		Params: &types.ChatManage{
 			PipelineRequest: types.PipelineRequest{
 				VectorThreshold:  e.config.Conversation.VectorThreshold,
@@ -300,6 +330,12 @@ func (e *EvaluationService) Evaluation(ctx context.Context,
 	logger.Info(ctx, "Registering evaluation task")
 	e.evaluationMemoryStorage.register(detail)
 
+	// Persist initial task record (status=Pending) so a crashed/restarted
+	// service can still find the task and its config snapshot.
+	if err := e.evaluationRepository.Create(ctx, detailToRecord(detail)); err != nil {
+		logger.Errorf(ctx, "Failed to persist evaluation task %s: %v", taskID, err)
+	}
+
 	// Start evaluation in background goroutine
 	logger.Info(ctx, "Starting evaluation in background")
 	go func() {
@@ -310,18 +346,21 @@ func (e *EvaluationService) Evaluation(ctx context.Context,
 		// Update task status to running
 		detail.Task.Status = types.EvaluationStatueRunning
 		logger.Info(newCtx, "Evaluation task status set to running")
+		e.persistRecord(newCtx, detail, nil)
 
 		// Execute actual evaluation
 		if err := e.EvalDataset(newCtx, detail, knowledgeBaseID); err != nil {
 			detail.Task.Status = types.EvaluationStatueFailed
 			detail.Task.ErrMsg = err.Error()
 			logger.Errorf(newCtx, "Evaluation task failed: %v, task ID: %s", err, taskID)
+			e.finalizeRecord(newCtx, detail)
 			return
 		}
 
 		// Mark task as completed successfully
 		logger.Infof(newCtx, "Evaluation task completed successfully, task ID: %s", taskID)
 		detail.Task.Status = types.EvaluationStatueSuccess
+		e.finalizeRecord(newCtx, detail)
 	}()
 
 	logger.Infof(ctx, "Evaluation task created successfully, task ID: %s", taskID)
@@ -333,6 +372,11 @@ func (e *EvaluationService) Evaluation(ctx context.Context,
 func (e *EvaluationService) EvalDataset(ctx context.Context, detail *types.EvaluationDetail, knowledgeBaseID string) error {
 	logger.Info(ctx, "Start evaluating dataset")
 	logger.Infof(ctx, "Task ID: %s, Dataset ID: %s", detail.Task.ID, detail.Task.DatasetID)
+
+	// Ensure cost accumulator exists (defensive: Evaluation may not have initialized it).
+	if detail.Cost == nil {
+		detail.Cost = &types.EvaluationCost{}
+	}
 
 	// Retrieve dataset from storage
 	dataset, err := e.dataset.GetDatasetByID(ctx, detail.Task.DatasetID)
@@ -381,7 +425,7 @@ func (e *EvaluationService) EvalDataset(ctx context.Context, detail *types.Evalu
 	var finished int
 	var mu sync.Mutex
 	var g errgroup.Group
-	metricHook := NewHookMetric(len(dataset))
+	metricHook := NewHookMetric(len(dataset), passages)
 
 	// Set worker limit based on available CPUs
 	g.SetLimit(max(runtime.GOMAXPROCS(0)-1, 1))
@@ -428,6 +472,11 @@ func (e *EvaluationService) EvalDataset(ctx context.Context, detail *types.Evalu
 			mu.Lock()
 			finished += 1
 			metricResult := metricHook.MetricResult()
+			if chatManage.ChatResponse != nil {
+				detail.Cost.PromptTokens += int64(chatManage.ChatResponse.Usage.PromptTokens)
+				detail.Cost.CompletionTokens += int64(chatManage.ChatResponse.Usage.CompletionTokens)
+				detail.Cost.TotalTokens += int64(chatManage.ChatResponse.Usage.TotalTokens)
+			}
 			mu.Unlock()
 			e.evaluationMemoryStorage.update(detail.Task.ID, func(params *types.EvaluationDetail) {
 				params.Metric = metricResult
@@ -473,4 +522,89 @@ func getPassageList(dataset []*types.QAPair) []string {
 		}
 	}
 	return passages
+}
+
+// persistRecord 把内存中的 detail 落库（全量更新，含零值字段）。
+// endTime 为 nil 表示任务尚未结束（如刚置为 Running）。
+func (e *EvaluationService) persistRecord(ctx context.Context, detail *types.EvaluationDetail, endTime *time.Time) {
+	record := detailToRecord(detail)
+	record.EndTime = endTime
+	if err := e.evaluationRepository.Update(ctx, record); err != nil {
+		logger.Errorf(ctx, "Failed to persist evaluation task %s: %v", detail.Task.ID, err)
+	}
+}
+
+// finalizeRecord 在任务结束时计算总耗时并落库。
+func (e *EvaluationService) finalizeRecord(ctx context.Context, detail *types.EvaluationDetail) {
+	now := time.Now()
+	if detail.Cost != nil {
+		detail.Cost.LatencyMs = now.Sub(detail.Task.StartTime).Milliseconds()
+	}
+	e.persistRecord(ctx, detail, &now)
+}
+
+// detailToRecord 把内存结构 EvaluationDetail 转换为持久化模型。
+func detailToRecord(detail *types.EvaluationDetail) *types.EvaluationTaskRecord {
+	record := &types.EvaluationTaskRecord{
+		ID:        detail.Task.ID,
+		TenantID:  detail.Task.TenantID,
+		DatasetID: detail.Task.DatasetID,
+		Status:    int(detail.Task.Status),
+		ErrMsg:    detail.Task.ErrMsg,
+		Total:     detail.Task.Total,
+		Finished:  detail.Task.Finished,
+		StartTime: detail.Task.StartTime,
+	}
+	if detail.Params != nil {
+		if b, err := json.Marshal(detail.Params); err == nil {
+			record.Params = types.JSON(b)
+		}
+	}
+	if detail.Metric != nil {
+		if b, err := json.Marshal(detail.Metric); err == nil {
+			record.Metric = types.JSON(b)
+		}
+	}
+	if detail.Cost != nil {
+		record.PromptTokens = detail.Cost.PromptTokens
+		record.CompletionTokens = detail.Cost.CompletionTokens
+		record.TotalTokens = detail.Cost.TotalTokens
+		record.LatencyMs = detail.Cost.LatencyMs
+	}
+	return record
+}
+
+// recordToDetail 把持久化模型还原为内存结构（用于服务重启后查询历史结果）。
+func recordToDetail(record *types.EvaluationTaskRecord) *types.EvaluationDetail {
+	detail := &types.EvaluationDetail{
+		Task: &types.EvaluationTask{
+			ID:        record.ID,
+			TenantID:  record.TenantID,
+			DatasetID: record.DatasetID,
+			Status:    types.EvaluationStatue(record.Status),
+			ErrMsg:    record.ErrMsg,
+			Total:     record.Total,
+			Finished:  record.Finished,
+			StartTime: record.StartTime,
+		},
+		Cost: &types.EvaluationCost{
+			PromptTokens:     record.PromptTokens,
+			CompletionTokens: record.CompletionTokens,
+			TotalTokens:      record.TotalTokens,
+			LatencyMs:        record.LatencyMs,
+		},
+	}
+	if len(record.Params) > 0 {
+		var params types.ChatManage
+		if err := json.Unmarshal(record.Params, &params); err == nil {
+			detail.Params = &params
+		}
+	}
+	if len(record.Metric) > 0 {
+		var metric types.MetricResult
+		if err := json.Unmarshal(record.Metric, &metric); err == nil {
+			detail.Metric = &metric
+		}
+	}
+	return detail
 }

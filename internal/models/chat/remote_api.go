@@ -197,7 +197,7 @@ func (c *RemoteAPIChat) Chat(ctx context.Context, messages []Message, opts *Chat
 	if err != nil {
 		return nil, err
 	}
-	logUsage(timeoutCtx, c.modelName, &result.Usage)
+	logUsage(timeoutCtx, c.modelID, c.modelName, &result.Usage)
 	return result, nil
 }
 
@@ -258,7 +258,7 @@ func (c *RemoteAPIChat) chatWithRawHTTP(ctx context.Context, endpoint string, cu
 	}
 	c.applyCompletionToolCallMetadata(body, result)
 	applyRawPromptCacheUsage(body, &result.Usage)
-	logUsage(ctx, c.modelName, &result.Usage)
+	logUsage(ctx, c.modelID, c.modelName, &result.Usage)
 	return result, nil
 }
 

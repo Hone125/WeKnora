@@ -1,0 +1,31 @@
+# config/builtin_models.yaml — 课题三评测用内置模型（SiliconFlow 硅基流动）
+#
+# 从 builtin_models.yaml.example 复制而来，已按评测需要配置：
+#   - chat 模型：deepseek-ai/DeepSeek-V3（生成答案，算 BLEU/ROUGE）
+#   - embedding 模型：BAAI/bge-m3（向量化，1024 维）
+# 真实 API key 从 .env 读取（LLM_API_KEY / EMBEDDING_API_KEY），不写进本文件。
+# 改动后重启应用即生效。
+
+builtin_models:
+  - id: builtin-llm-default
+    type: KnowledgeQA
+    source: remote
+    is_default: true
+    name: ${LLM_MODEL_NAME}
+    parameters:
+      base_url: ${LLM_BASE_URL}
+      api_key: ${LLM_API_KEY}
+      provider: openai
+
+  - id: builtin-embedding-default
+    type: Embedding
+    source: remote
+    is_default: true
+    name: ${EMBEDDING_MODEL_NAME}
+    parameters:
+      base_url: ${EMBEDDING_BASE_URL}
+      api_key: ${EMBEDDING_API_KEY}
+      provider: openai
+      embedding_parameters:
+        dimension: 1024
+        truncate_prompt_tokens: 0

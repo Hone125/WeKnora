@@ -181,3 +181,128 @@ func TestWikiPageModifyUserPrompt_SharedSourceContextPrecedesPageVariables(t *te
 		t.Fatalf("shared source context is not part of the cacheable prefix: %s", a[:ia])
 	}
 }
+
+// renderWikiPrompt renders a wiki prompt template with a string→string data map.
+// It is a generalised counterpart to renderWikiChunkCitation / renderWikiPageModify
+// for the per-document prompts (summary / knowledge-extract / candidate-slug).
+func renderWikiPrompt(t *testing.T, name, tmpl string, data map[string]string) string {
+	t.Helper()
+	tpl, err := template.New(name).Parse(tmpl)
+	if err != nil {
+		t.Fatalf("parse template: %v", err)
+	}
+	var b strings.Builder
+	if err := tpl.Execute(&b, data); err != nil {
+		t.Fatalf("execute template: %v", err)
+	}
+	return b.String()
+}
+
+// TestWikiPrompt_StableInstructionPrefixAcrossDocuments verifies the property
+// that enables provider prefix caching across a batch ingest: for the three
+// per-document wiki prompts the static <instructions> block precedes the
+// per-document <document> data block, so two documents with identical KB-level
+// settings (language, granularity) render a byte-identical prefix up to
+// <document>. Only the per-document content/slug blocks trail it, letting the
+// provider reuse the long instruction prefix for every document after the first.
+func TestWikiPrompt_StableInstructionPrefixAcrossDocuments(t *testing.T) {
+	const marker = "\n<document>\n"
+	cases := []struct {
+		name         string
+		tmpl         string
+		dataA        map[string]string
+		dataB        map[string]string
+		mustInPrefix string
+	}{
+		{
+			name: "WikiSummaryPrompt",
+			tmpl: WikiSummaryPrompt,
+			dataA: map[string]string{
+				"Content": "doc one content", "ExtractedSlugs": "[[entity/a]]", "Language": "English",
+			},
+			dataB: map[string]string{
+				"Content": "completely different doc two content", "ExtractedSlugs": "[[entity/b]]", "Language": "English",
+			},
+			mustInPrefix: "10. **Empty content rule**",
+		},
+		{
+			name: "WikiKnowledgeExtractPrompt",
+			tmpl: WikiKnowledgeExtractPrompt,
+			dataA: map[string]string{
+				"Content": "doc one content", "PreviousSlugs": "entity/a", "Language": "English",
+			},
+			dataB: map[string]string{
+				"Content": "completely different doc two content", "PreviousSlugs": "entity/b", "Language": "English",
+			},
+			mustInPrefix: "### JSON Formatting Rules",
+		},
+		{
+			name: "WikiCandidateSlugPrompt",
+			tmpl: WikiCandidateSlugPrompt,
+			dataA: map[string]string{
+				"Content": "doc one content", "PreviousSlugs": "entity/a", "Language": "English",
+				"Granularity": "standard", "GranularityGuidance": WikiGranularityGuidanceStandard,
+			},
+			dataB: map[string]string{
+				"Content": "completely different doc two content", "PreviousSlugs": "entity/b", "Language": "English",
+				"Granularity": "standard", "GranularityGuidance": WikiGranularityGuidanceStandard,
+			},
+			mustInPrefix: "### JSON Formatting Rules",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := renderWikiPrompt(t, tc.name, tc.tmpl, tc.dataA)
+			b := renderWikiPrompt(t, tc.name, tc.tmpl, tc.dataB)
+
+			ia := strings.Index(a, marker)
+			ib := strings.Index(b, marker)
+			if ia < 0 || ib < 0 {
+				t.Fatalf("rendered prompt missing %q block", marker)
+			}
+			if a[:ia] != b[:ib] {
+				t.Errorf("instruction prefix before <document> differs across documents — provider prefix cache will miss.\nA-prefix:\n%s\n---\nB-prefix:\n%s", a[:ia], b[:ib])
+			}
+			// 代表固定规则的字符串必须落在共享前缀内，而非动态 document 之后。
+			if idx := strings.Index(a, tc.mustInPrefix); idx < 0 || idx > ia {
+				t.Errorf("%q must appear before <document> to be part of the cached prefix (idx=%d, doc=%d)", tc.mustInPrefix, idx, ia)
+			}
+		})
+	}
+}
+
+// TestWikiPrompt_PreservesPlaceholders guards against accidental loss of a
+// template field during the instruction-first reorder.
+func TestWikiPrompt_PreservesPlaceholders(t *testing.T) {
+	cases := []struct {
+		name   string
+		tmpl   string
+		fields []string
+	}{
+		{
+			name: "WikiSummaryPrompt",
+			tmpl: WikiSummaryPrompt,
+			fields: []string{"{{.Content}}", "{{.ExtractedSlugs}}", "{{.Language}}"},
+		},
+		{
+			name: "WikiKnowledgeExtractPrompt",
+			tmpl: WikiKnowledgeExtractPrompt,
+			fields: []string{"{{.Content}}", "{{.PreviousSlugs}}", "{{.Language}}"},
+		},
+		{
+			name: "WikiCandidateSlugPrompt",
+			tmpl: WikiCandidateSlugPrompt,
+			fields: []string{"{{.Content}}", "{{.PreviousSlugs}}", "{{.Language}}", "{{.Granularity}}", "{{.GranularityGuidance}}"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, field := range tc.fields {
+				if !strings.Contains(tc.tmpl, field) {
+					t.Errorf("%s lost template field %q", tc.name, field)
+				}
+			}
+		})
+	}
+}
