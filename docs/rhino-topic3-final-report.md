@@ -43,6 +43,14 @@
 
 成本约 prompt 4.4 万 tokens，耗时约 1.7–2.1 万 ms。
 
+**答案质量（生成）实测**（同一 30 问，完整 RAG pipeline 含 LLM 生成，落库快照 `eval_result2.json`）：
+
+| 指标 | bleu1 | bleu2 | bleu4 | rouge1 | rouge2 | rougel |
+|---|---|---|---|---|---|---|
+| 值 | 0.117 | 0.081 | 0.051 | 0.251 | 0.087 | 0.231 |
+
+> 该次完整评测 retrieval recall=0.50（与检索专项基线 0.533 略有差异，源于两次独立运行与向量检索的近似性）；同次成本快照 prompt 43,896 / completion 4,616 / total 48,512 tokens，耗时 17,455 ms。
+
 **过程中修复的两个关键 bug**（体现「指标可信」的功夫）：
 1. 检索指标恒满分：`metric_hook.go` 原来只用该题自己的相关段落匹配，检索到的无关 chunk 被丢弃 → 全 1.0。修复：增加全量语料索引，遍历全 corpus。`internal/application/service/metric_hook.go:161`
 2. `embedding_top_k=30` 无区分度：30 = 语料全量，检索恒含所有相关段落。修复：`config.yaml` 改 `embedding_top_k: 5`。
@@ -71,6 +79,14 @@
 - **真实 API 实测**（SiliconFlow `BAAI/bge-m3`，30 chunk）：完全重复重建 provider 向量调用降幅 **100%**（30→0），增量重建（2/3 文档未变）降幅 **66.7%**（30→10）。测量程序按 `cache.go` 缓存算法 1:1 复刻（sha256 键 + LRU + 命中短路）并真实 HTTP 调用，可带任意 Key 复现。
 - **跨重启实测**（`cmd/cachebench`，真实 PostgreSQL `embedding_cache` 表）：第一轮冷缓存写入 DB 二级缓存后丢弃进程内 LRU（等价进程重启），第二轮仅靠 DB 二级缓存 provider 调用降幅 **100%**（30→0）——补上了「跨重启是否真命中」的端到端证据。
 - **省钱换算**（`cmd/embedcost`，真实 API token 计量）：30 chunk 真实消耗 1980 prompt_tokens（单 chunk 66 token），按 bge-m3 单价 0.07 元/1M token，完全重建省 0.0001 元、放大到 10 万 chunk 省 0.46 元、100 万 chunk 省 4.62 元。绝对值小是因为 embedding 单价极低——缓存的核心价值在「调用次数砍到 0 → 提速 + 降限流 + 降 provider 依赖」，省钱的大头在 M3② 的 prompt 前缀缓存（DeepSeek-V3 输入 2 元 vs 缓存读取 0.2 元，差价 1.8 元/1M，是 embedding 单价的 25 倍）。
+
+  **三个场景降幅一览**（同 30 chunk，`cmd/cachebench` + `cmd/embedbench` 实测）：
+
+| 场景 | 无缓存 provider 调用 | 有缓存 provider 调用 | 降幅 |
+|---|---|---|---|
+| 完全重建（同进程） | 30 | 0 | 100% |
+| 增量重建（2/3 文档未变） | 30 | 10 | 66.7% |
+| 跨重启重建（仅靠 DB 二级缓存） | 30 | 0 | 100% |
 
 ### M3② · prompt 拼装顺序优化（固定前置）
 
@@ -121,15 +137,18 @@
 | mineru / mineru_cloud | MinerU 自托管/云 | 10 | ❌（未配置） |
 | paddleocr_vl / paddleocr_vl_cloud | PaddleOCR-VL 自托管/云 | 6 | ❌（未配置） |
 
-- **两个引擎实测**（coverage / similarity / structure_fidelity 三指标，全 1.0）：
+- **两个引擎实测**（coverage / similarity / structure_fidelity 三指标）：
 
 | 引擎 | 用例 | 结果 |
 |---|---|---|
 | simple | md 透传 / txt 透传 / csv→表格 | 全 1.0 |
 | builtin | md 透传 / md 表格标准化 / html→markdown | 全 1.0 |
+| builtin | docx 垂直合并表格（真实二进制样本 `docreader/tests/fixtures/issue_2634_vertical_merge.docx`） | coverage 1.0 / similarity 0.85 / structure 1.0 |
 
   builtin 引擎通过 DocReader gRPC 实测（`cmd/builtinbench` 直连 50051），其中 **html→markdown**（标题/加粗/列表/链接/表格全部正确还原）是 simple 引擎无法处理的复杂格式——这是「内置引擎处理 complex 格式」能力的量化证据。
-- **设计要点**：指标库引擎无关，接入任一引擎喂同一份 golden 文档即可横向对比——这是「基线」而非一次性 benchmark。已覆盖 simple（纯 Go 轻量）+ builtin（DocReader 复杂格式）两极。
+
+  docx 这个 case 有特殊价值：golden 是「纵向合并单元格应展开到每一行」的期望输出，而 builtin 引擎实际把合并单元格留空，三指标精确刻画了差异——`structure=1.0`（表格行/列/标题结构完全保真）、`coverage=1.0`（检测方法文字未丢失、只出现在首行）、`similarity=0.85`（合并单元格未展开到 Q0102–Q0104）。这证明评测框架不是「全打满分」，而是能抓住真实的解析缺陷——正是「基线」的意义。
+- **设计要点**：指标库引擎无关，接入任一引擎喂同一份 golden 文档即可横向对比——这是「基线」而非一次性 benchmark。已覆盖 simple（纯 Go 轻量）+ builtin（DocReader 复杂格式 + 二进制 docx）两极。
 
 ---
 
