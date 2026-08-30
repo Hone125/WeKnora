@@ -11,5 +11,5 @@ result:
 repository:
   url: "https://github.com/Hone125/WeKnora"
   branch: "rhino-topic3"
-  commit: "77b2642fd1d6793a86d02974f0510ef81b05fe21"
-  tag: "rhino-2026-final-4"
+  commit: "a4e96d8134fb2a11e3aca352af4b40311dc4fa0a"
+  tag: "rhino-2026-final-5"
