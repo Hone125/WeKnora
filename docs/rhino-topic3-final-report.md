@@ -39,7 +39,7 @@
 
 | 指标 | precision | recall | ndcg3 | ndcg10 | mrr | map |
 |---|---|---|---|---|---|---|
-| 值 | 0.116 | 0.533 | 0.521 | 0.521 | 0.517 | 0.517 |
+| 值 | 0.108 | 0.500 | 0.488 | 0.488 | 0.483 | 0.483 |
 
 成本约 prompt 4.4 万 tokens，耗时约 1.7–2.1 万 ms。
 
@@ -49,7 +49,7 @@
 |---|---|---|---|---|---|---|
 | 值 | 0.117 | 0.081 | 0.051 | 0.251 | 0.087 | 0.231 |
 
-> 该次完整评测 retrieval recall=0.50（与检索专项基线 0.533 略有差异，源于两次独立运行与向量检索的近似性）；同次成本快照 prompt 43,896 / completion 4,616 / total 48,512 tokens，耗时 17,455 ms。
+> 该次完整评测 retrieval recall=0.500，与上表检索基线一致（同一份 `eval_result2.json` 落库快照）；同次成本快照 prompt 43,896 / completion 4,616 / total 48,512 tokens，耗时 17,455 ms。
 
 **过程中修复的两个关键 bug**（体现「指标可信」的功夫）：
 1. 检索指标恒满分：`metric_hook.go` 原来只用该题自己的相关段落匹配，检索到的无关 chunk 被丢弃 → 全 1.0。修复：增加全量语料索引，遍历全 corpus。`internal/application/service/metric_hook.go:161`
@@ -117,8 +117,8 @@
 
 | 输入 | 结果 |
 |---|---|
-| `docs/eval_gate_regression_fixture.json`（recall 0.533→0.450，模拟降召回） | `passed:false`，报 `recall delta=-0.083 > tolerance 0.05`，exit 1 |
-| `docs/eval_gate_baseline_fixture.json`（M1 真实基线 recall=0.533，实测值） | `passed:true`，exit 0 |
+| `docs/eval_gate_regression_fixture.json`（recall 0.5→0.42，模拟降召回） | `passed:false`，报 `recall delta=-0.08 > tolerance 0.05`，exit 1 |
+| `docs/eval_gate_baseline_fixture.json`（M1 真实基线 recall=0.5，实测值） | `passed:true`，exit 0 |
 
 ### M5（选做）· 8 解析引擎横向解析质量基线
 
@@ -168,6 +168,7 @@
 
 ```bash
 # 前置：Docker 基础设施已起（postgres/redis/docreader/langfuse）；.env 已配模型 Key
+#       内置 30 问 default 数据集（dataset/samples/*.parquet）由后端启动时自动加载，无需手动导入
 # Windows 原生编译环境（MinGW）：CC/CXX 指向 WinLibs gcc/g++，PATH 含 mingw64/bin
 
 # 1) 启动后端

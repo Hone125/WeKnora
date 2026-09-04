@@ -24,7 +24,7 @@ import (
 // a metric present in Baseline but absent from Thresholds is reported but never
 // blocks.
 type GateConfig struct {
-	// Baseline maps a metric name to its expected value (e.g. "recall": 0.533).
+	// Baseline maps a metric name to its expected value (e.g. "recall": 0.5).
 	Baseline map[string]float64 `json:"baseline"`
 	// Thresholds maps a metric name to the maximum allowed drop from baseline
 	// before it is considered a regression (e.g. "recall": 0.05 means recall

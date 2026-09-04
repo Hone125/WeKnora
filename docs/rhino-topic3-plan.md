@@ -156,7 +156,7 @@
 3. **四类结果**：单次运行同时产出检索准确性（precision/recall/ndcg3/ndcg10/mrr/map）、答案质量（bleu/rouge）、成本（prompt/completion/total tokens）、耗时（latency_ms）。
 4. **一条命令复现**：`scripts/eval.sh`（登录 → 触发 → 轮询 → 四类报告），Makefile 已加 `eval` 目标。
 
-**实测基线**（`embedding_top_k=5`，30 问）：precision≈0.116、recall≈0.533、ndcg3≈0.521、ndcg10≈0.521、mrr≈0.517、map≈0.517；成本约 prompt 4.4 万 tokens / 耗时约 1.7–2.1 万 ms。
+**实测基线**（`embedding_top_k=5`，30 问）：precision≈0.108、recall≈0.5、ndcg3≈0.488、ndcg10≈0.488、mrr≈0.483、map≈0.483；成本约 prompt 4.4 万 tokens / 耗时约 1.7–2.1 万 ms。
 
 **过程中修复的两个关键 bug**：
 
@@ -232,14 +232,14 @@
 1. **门禁判定核心** `internal/evalgate/`（新包）：`JudgeGate(current, cfg)` 把评测指标与基线对比，规则是「current < baseline - tolerance 即退化」。**刻意不 import `types`、用 `map[string]float64` 表示指标**——这绕开了「任何 import types 的包测试都被 gojieba cgo 崩溃拖垮」的遗留问题，让门禁逻辑的 10 个单测在 CI 里能干净跑。`FlattenEvaluationResponse` 从评测 API 原始响应提取 retrieval/generation 指标。
 2. **CLI** `cmd/evalgate/`：读门禁配置 + 评测结果 JSON → 输出判定报告 → 退出码 0/1/2（通过/退化/错误）。
 3. **脚本 + Makefile**：`scripts/eval-gate.sh`（登录 → 触发评测 → 轮询 → 存结果 → `go build` evalgate → 判定）+ Makefile `eval-gate` 目标，与 M1 的 `make eval` 对称。
-4. **门禁配置** `eval_gate.json`：baseline 用 M1 实测基线（recall=0.533 等），thresholds 只对**确定性检索指标**设门禁（precision/recall/ndcg/mrr/map），生成质量指标（bleu/rouge）因受 LLM 随机性影响默认不设阈值、仅展示不阻断。
+4. **门禁配置** `eval_gate.json`：baseline 用 M1 实测基线（recall=0.5 等），thresholds 只对**确定性检索指标**设门禁（precision/recall/ndcg/mrr/map），生成质量指标（bleu/rouge）因受 LLM 随机性影响默认不设阈值、仅展示不阻断。
 5. **CI workflow** `.github/workflows/eval-gate.yml`：`unit`（跑门禁单测）+ `gate-demo`（用降召回 fixture 自证门禁会 exit 1 并报出 recall 退化）两个 job；触发为 `schedule`（每周错峰）+ `workflow_dispatch` + `pull_request`（仅门禁相关文件变更时）。
 
 **端到端自证（无需真实模型 Key）**：
 
 | 输入 | 结果 |
 |---|---|
-| `docs/eval_gate_regression_fixture.json`（recall 0.533→0.450） | `passed:false`，精确报出 `recall delta=-0.083 > tolerance 0.05`，退出码 1 |
+| `docs/eval_gate_regression_fixture.json`（recall 0.5→0.42） | `passed:false`，精确报出 `recall delta=-0.08 > tolerance 0.05`，退出码 1 |
 | 正常结果（recall=0.55） | `passed:true`，退出码 0 |
 
 门禁单测 10 例全过：`TestJudgeGate_Pass/Regression/ImprovementNeverFails/SkipsMissing…/DeterministicOrder`、`TestLoadGateConfig*`、`TestFlattenEvaluationResponse*`。

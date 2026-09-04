@@ -9,12 +9,12 @@ import (
 func sampleConfig() GateConfig {
 	return GateConfig{
 		Baseline: map[string]float64{
-			"precision": 0.116,
-			"recall":    0.533,
-			"ndcg3":     0.521,
-			"ndcg10":    0.521,
-			"mrr":       0.517,
-			"map":       0.517,
+			"precision": 0.108,
+			"recall":    0.5,
+			"ndcg3":     0.488,
+			"ndcg10":    0.488,
+			"mrr":       0.483,
+			"map":       0.483,
 		},
 		Thresholds: map[string]float64{
 			"precision": 0.02,
@@ -46,14 +46,14 @@ func TestJudgeGate_Pass(t *testing.T) {
 }
 
 func TestJudgeGate_Regression(t *testing.T) {
-	// recall 掉到 0.45（delta=-0.083），超过 0.05 容忍 → 判定退化。
+	// recall 掉到 0.42（delta=-0.08），超过 0.05 容忍 → 判定退化。
 	current := map[string]float64{
-		"precision": 0.116,
-		"recall":    0.450,
-		"ndcg3":     0.521,
-		"ndcg10":    0.521,
-		"mrr":       0.517,
-		"map":       0.517,
+		"precision": 0.108,
+		"recall":    0.42,
+		"ndcg3":     0.488,
+		"ndcg10":    0.488,
+		"mrr":       0.483,
+		"map":       0.483,
 	}
 	report := JudgeGate(current, sampleConfig())
 	if report.Passed {
@@ -66,7 +66,7 @@ func TestJudgeGate_Regression(t *testing.T) {
 	if r.Metric != "recall" {
 		t.Fatalf("expected recall regression, got %q", r.Metric)
 	}
-	if r.Current != 0.450 || r.Baseline != 0.533 {
+	if r.Current != 0.42 || r.Baseline != 0.5 {
 		t.Fatalf("wrong values: %+v", r)
 	}
 }
@@ -127,7 +127,7 @@ func TestJudgeGate_DeterministicOrder(t *testing.T) {
 func TestLoadGateConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gate.json")
-	content := `{"baseline":{"recall":0.533},"thresholds":{"recall":0.05}}`
+	content := `{"baseline":{"recall":0.5},"thresholds":{"recall":0.05}}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestLoadGateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Baseline["recall"] != 0.533 || cfg.Thresholds["recall"] != 0.05 {
+	if cfg.Baseline["recall"] != 0.5 || cfg.Thresholds["recall"] != 0.05 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -155,7 +155,7 @@ func TestFlattenEvaluationResponse(t *testing.T) {
 	raw := []byte(`{
 		"data": {
 			"metric": {
-				"retrieval_metrics": {"precision": 0.116, "recall": 0.533},
+				"retrieval_metrics": {"precision": 0.108, "recall": 0.5},
 				"generation_metrics": {"bleu1": 0.5, "rougel": 0.6}
 			}
 		}
@@ -164,7 +164,7 @@ func TestFlattenEvaluationResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flatten: %v", err)
 	}
-	if flat["recall"] != 0.533 || flat["bleu1"] != 0.5 || flat["rougel"] != 0.6 {
+	if flat["recall"] != 0.5 || flat["bleu1"] != 0.5 || flat["rougel"] != 0.6 {
 		t.Fatalf("unexpected flat map: %+v", flat)
 	}
 }
