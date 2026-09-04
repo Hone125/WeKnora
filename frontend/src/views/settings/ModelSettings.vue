@@ -50,12 +50,25 @@
       <div class="usage-panel__header">
         <div>
           <h3 class="usage-panel__title">模型用量与成本</h3>
-          <p class="usage-panel__subtitle">最近 7 天的调用量、缓存命中率与费用（费用按模型当前定价即时计算）</p>
+          <p class="usage-panel__subtitle">{{ usageSubtitle }}</p>
         </div>
-        <t-button variant="outline" size="small" :loading="usageLoading" @click="loadUsage">
-          <template #icon><t-icon name="refresh" /></template>
-          刷新
-        </t-button>
+        <div class="usage-panel__actions">
+          <t-date-range-picker
+            v-model="usageTimeRange"
+            :placeholder="['开始日期', '结束日期']"
+            :disable-date="disableFutureDate"
+            clearable
+            allow-input
+            size="small"
+            class="usage-panel__date"
+          >
+            <template #prefixIcon><t-icon name="time" size="16px" /></template>
+          </t-date-range-picker>
+          <t-button variant="outline" size="small" :loading="usageLoading" @click="loadUsage">
+            <template #icon><t-icon name="refresh" /></template>
+            刷新
+          </t-button>
+        </div>
       </div>
 
       <t-loading :loading="usageLoading" size="small">
@@ -218,6 +231,16 @@ const allModels = ref<ModelConfig[]>([])
 const usageLoading = ref(false)
 const usageRows = ref<ModelUsageAggregate[]>([])
 const usageError = ref('')
+// 用量统计时间区间（"YYYY-MM-DD"，空数组 = 最近 7 天）
+const usageTimeRange = ref<string[]>([])
+const disableFutureDate = { after: new Date(new Date().setHours(23, 59, 59, 999)) }
+
+// 动态说明当前统计区间
+const usageSubtitle = computed(() => {
+  const [s, e] = usageTimeRange.value || []
+  const scope = s && e ? `${s} ~ ${e}` : '最近 7 天'
+  return `${scope}的调用量、缓存命中率与费用（费用按模型当前定价即时计算）`
+})
 
 // 后端 type → 前端分组 type 的映射
 const backendTypeToModelType: Record<string, ModelType> = {
@@ -362,18 +385,27 @@ const loadModels = async () => {
   }
 }
 
-// 加载模型用量与成本概览（默认最近 7 天）
+// 加载模型用量与成本概览（默认最近 7 天，可按时间区间筛选）
 const loadUsage = async () => {
   usageLoading.value = true
   usageError.value = ''
   try {
-    usageRows.value = await getModelUsage()
+    const [s, e] = usageTimeRange.value || []
+    // 后端 parseTimeQuery 支持 RFC3339；用 UTC 整天区间避免时区歧义
+    const start = s ? `${s}T00:00:00Z` : undefined
+    const end = e ? `${e}T23:59:59Z` : undefined
+    usageRows.value = await getModelUsage(start, end)
   } catch (error: any) {
     usageError.value = error?.message || '加载成本数据失败'
   } finally {
     usageLoading.value = false
   }
 }
+
+// 时间区间变化时自动刷新（清空回退最近 7 天）
+watch(usageTimeRange, () => {
+  loadUsage()
+})
 
 // 千分位格式化
 const formatTokens = (n: number): string => {
@@ -1114,6 +1146,17 @@ onMounted(() => {
   font-size: 12px;
   color: var(--td-text-color-secondary);
   line-height: 1.5;
+}
+
+.usage-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.usage-panel__date {
+  width: 240px;
 }
 
 .usage-panel__error {
