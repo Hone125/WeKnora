@@ -283,6 +283,23 @@
 
 **过程中修复**：`parsebench.exe` 运行时 0xC0000135（STATUS_DLL_NOT_FOUND）——cgo 二进制运行时缺 `libgcc_s_seh-1.dll` 等，根因是只设了 `CC`/`CXX` 绝对路径、没把 WinLibs `mingw64/bin` 加进 `PATH`。修复：运行前 `PATH` 前置该目录。
 
+### 2026-09-12 · 验收 A（真实调用链缓存）+ 验收 B（CI 真·门禁）闭环
+
+**验收 A —— embedding 二级缓存「真实调用链」实测**（详见 `docs/rhino-topic3-cache-experiment.md`）：
+
+- 用真实后端（`bin/server.exe`，本机 gcc 16.1.0 + sqlite-vec cgo 编译）+ 真实 SiliconFlow `bge-m3` 跑完整评测链路，补足 cachebench 只有「算法复刻」的缺口。
+- 冷跑：`embedding_cache` 0 → 61 行（60 corpus chunk + 1 summary chunk）。
+- 重启后端（清空进程内一级 LRU）后热跑：仅新增 1 行，且来自 LLM 现生成的 summary 摘要（文本逐字不同 → key 变 → 正常 miss）；**corpus 60 chunk 跨重启 100% 命中、provider 调用降为 0**。
+- 冷/热召回指标一致（ndcg 0.488 vs 0.504，抖动来自 LLM 生成），缓存命中不影响质量。
+- 附带落地：启动后端 AUTO_MIGRATE 把迁移从 91 补跑到 93，`model_usages`(092)、`embedding_cache`(093) 建表，解决「账本表名错配」。
+- 新增 `scripts/start-local-server.sh`：本地启动编译好的后端连 dev 基础设施，支持反复「杀进程→重启」做跨重启实验。
+
+**验收 B —— GitHub Actions 真实评测门禁通过**：
+
+- `Real Eval Quality Gate`（`.github/workflows/topic3-eval-real.yml`）workflow_dispatch 触发，conclusion **success**，约 6.7 分钟。
+- CI 成绩 precision 0.111 / recall 0.5 / ndcg 0.488 / mrr 0.483，与本地冷跑基线（0.108 / 0.5 / 0.488 / 0.483）**一致** → 干净容器环境一条命令复现。
+- 门禁 `eval_gate.json` 基线 = M1 实测 + 紧阈值；CI 跑出 ndcg=基线、precision 略高于基线，正确判定 passed（exit 0），无需再校准。
+
 ### 待办（按 9/4 中期、9/13 截止倒排）
 
 - **最终提交**：Tag + `submission.yaml` + 文档 + 邮件。
