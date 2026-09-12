@@ -7,7 +7,7 @@
 
 ---
 
-> **2026-09-11 验收复核：本报告以下历史完成描述不能全部视为已验收。** 当前 CI 仅运行门禁样例，尚未验证修改后的真实检索链路；独立缓存实验不等于正式重建索引或实际进程重启实验；Wiki 固定前缀字节数不等于厂商缓存命中率。结果保存在 `evaluation_tasks`，没有另建 `evaluation_results` 表。账本表名、批量缓存和门禁缺失指标问题正在整改。请结合 [验收整改记录](rhino-topic3-acceptance-audit.md) 阅读。
+> **2026-09-12 验收复核（最新）：真实检索链路与缓存的前后实测已在云端 CI 补齐直接计数证据。** 门禁真实拦截退化（run 34684475268，6 指标报回归，见 M4）、缓存冷 36→热 0 次真实 HTTP（run 34684838421，DB 命中 60，见 M3①）、冷缓存直接计数（run 34681726847）。仍保留的口径边界：Wiki 固定前缀字节数 ≠ 厂商缓存命中率（厂商真实 token 实测另见 M3②）；结果保存在 `evaluation_tasks`，未另建 `evaluation_results` 表。请结合 [验收整改记录](rhino-topic3-acceptance-audit.md) 阅读。
 
 ## 0. 一句话成果
 
@@ -80,6 +80,14 @@
 - **验证**：`cache_test.go` 9 用例——命中短路（命中后 provider 零调用）、批量只补 miss（批量场景只重算未命中项）、LRU 淘汰、二级跨实例命中、跨模型不串扰等。
 - **真实 API 实测**（SiliconFlow `BAAI/bge-m3`，30 chunk）：完全重复重建 provider 向量调用降幅 **100%**（30→0），增量重建（2/3 文档未变）降幅 **66.7%**（30→10）。测量程序按 `cache.go` 缓存算法 1:1 复刻（sha256 键 + LRU + 命中短路）并真实 HTTP 调用，可带任意 Key 复现。
 - **跨重启实测**（`cmd/cachebench`，真实 PostgreSQL `embedding_cache` 表）：第一轮冷缓存写入 DB 二级缓存后丢弃进程内 LRU（等价进程重启），第二轮仅靠 DB 二级缓存 provider 调用降幅 **100%**（30→0）——补上了「跨重启是否真命中」的端到端证据。
+- **云端 CI 直接计数（正式评测调用链，最强证据）**：独立 workflow `topic3-cache-hit.yml` 在 CI 里起 postgres+redis+server，**同一进程连跑两遍 30 题默认数据集**，两遍都读 `embedding_measurement` 直接计数（非缓存表行数、非字节比例）：
+
+| 场景 | http_attempts | memory_hits | database_hits | cache_misses |
+|---|---:|---:|---:|---:|
+| 冷缓存（第一遍） | 36 | 0 | 0 | 60 |
+| 热缓存（第二遍） | **0** | 0 | **60** | **0** |
+
+真实 provider HTTP 调用 **36 → 0（降幅 100%）**。第二遍 `memory_hits=0`、`database_hits=60`，说明命中**全部来自 DB 持久化二级缓存**（每个评测任务用独立上下文，内存缓存不跨任务复用，等价于重启后内存清空）——即在正式检索/评测调用链上证明了跨重启持久化缓存的真实收益。这是「缓存省了多少次真实 provider 往返」的直接计数证据，比独立程序复刻算法更有说服力。
 - **省钱换算**（`cmd/embedcost`，真实 API token 计量）：30 chunk 真实消耗 1980 prompt_tokens（单 chunk 66 token），按 bge-m3 单价 0.07 元/1M token，完全重建省 0.0001 元、放大到 10 万 chunk 省 0.46 元、100 万 chunk 省 4.62 元。绝对值小是因为 embedding 单价极低——缓存的核心价值在「调用次数砍到 0 → 提速 + 降限流 + 降 provider 依赖」，省钱的大头在 M3② 的 prompt 前缀缓存（DeepSeek-V3 输入 2 元 vs 缓存读取 0.2 元，差价 1.8 元/1M，是 embedding 单价的 25 倍）。
 
   **三个场景降幅一览**（同 30 chunk，`cmd/cachebench` + `cmd/embedbench` 实测）：
@@ -130,6 +138,8 @@
 |---|---|
 | `docs/eval_gate_regression_fixture.json`（recall 0.5→0.42，模拟降召回） | `passed:false`，报 `recall delta=-0.08 > tolerance 0.05`，exit 1 |
 | `docs/eval_gate_baseline_fixture.json`（M1 真实基线 recall=0.5，实测值） | `passed:true`，exit 0 |
+
+- **真实环境退化实验（CI 活证据，run 34684475268）**：`topic3-eval-real.yml` 的 `regression_probe` 输入把检索阈值拉高到 0.99（合法范围内），CI 起 postgres+redis+server 真实跑完 30 题后门禁报 `passed=false`，6 个检索指标全部退化——recall 0.5→0.367、map/mrr 0.483→0.328、ndcg3/10 0.488→0.338、precision 0.108→0.08，逐项超过容差被拦截。证明门禁不是摆设：真实改坏检索行为 → CI 自动报错并指出退化指标，对应验收 B（不再只是 fixture 自证）。过程中还真实踩到「阈值写 2/1000000 超出 config 校验 [0,1] 范围、server 启动即 panic」的坑，说明负向实验本身也要真实跑一遍才能发现静态 fixture 覆盖不到的配置校验错误。
 
 ### M5（选做）· 8 解析引擎横向解析质量基线
 
