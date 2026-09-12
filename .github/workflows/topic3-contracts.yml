@@ -1,0 +1,33 @@
+name: Topic 3 cache and usage regression tests
+
+on:
+  pull_request:
+    paths:
+      - 'internal/models/embedding/**'
+      - 'internal/models/limiter/**'
+      - 'internal/types/**'
+      - 'internal/application/repository/**'
+      - 'migrations/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/topic3-contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test production cache wrappers and database ledger
+        run: |
+          export CGO_CFLAGS="-I${GITHUB_WORKSPACE}/third_party/sqlite"
+          go test ./internal/models/embedding ./internal/application/repository -run 'TestCache|TestMemCache|TestEncodeDecode|TestConcurrency|TestModelUsage' -count=1

@@ -7,6 +7,8 @@
 
 ---
 
+> **2026-09-11 验收复核：本报告以下历史完成描述不能全部视为已验收。** 当前 CI 仅运行门禁样例，尚未验证修改后的真实检索链路；独立缓存实验不等于正式重建索引或实际进程重启实验；Wiki 固定前缀字节数不等于厂商缓存命中率。结果保存在 `evaluation_tasks`，没有另建 `evaluation_results` 表。账本表名、批量缓存和门禁缺失指标问题正在整改。请结合 [验收整改记录](rhino-topic3-acceptance-audit.md) 阅读。
+
 ## 0. 一句话成果
 
 把 WeKnora「有指标但不可复现、无门禁、成本盲区」的现状，改造成一套**可复现、可回归、可计价**的工程评测体系：评测结果落库、一条命令复现、CI 自动阻断质量退化、模型调用与费用落到结构化账本、embedding 与 prompt 双层缓存降本、8 解析引擎横向基线。
@@ -20,7 +22,7 @@
 | 他人在干净环境执行一条命令，得到与报告一致的指标 | M1：`make eval` / `bash scripts/eval.sh` 全自动（登录→触发→轮询→四类报告），配置全快照落库 | `scripts/eval.sh` + `Makefile eval` 目标 |
 | 提交降召回改动时 CI 自动报错并指出退化指标 | M4：门禁判定核心 + CI workflow + 降召回自证 fixture | `.github/workflows/eval-gate.yml` + `docs/eval_gate_regression_fixture.json`（自证 exit 1 并报出 `recall delta=-0.083`） |
 | 模型页面按模型与时间区间查看调用量/命中率/费用，数据来自数据库而非日志 | M2：`model_usages` 账本表 + 聚合 API + 模型页费用视图 | `internal/types/model_usage.go` + `handler/model_usage.go` + 前端 `ModelSettings.vue` |
-| 缓存优化有前后实测对比（重建索引 embedding 调用降幅、Wiki 缓存命中率提升） | M3① embedding 两级缓存 + M3② prompt 固定前置重排 | `internal/models/embedding/cache.go`（命中短路、批量只补 miss）+ `internal/agent/prompts_wiki.go`（前缀字节数 1861/4494/4039） |
+| 缓存优化有前后实测对比（重建索引 embedding 调用降幅、Wiki 缓存命中率提升） | M3① embedding 两级缓存 + M3② prompt 固定前置重排 | `internal/models/embedding/cache.go`（命中短路、批量只补 miss）+ `internal/agent/prompts_wiki.go`（固定前置重排，厂商实测命中率 98.2% vs 对照 0%） |
 
 ---
 
@@ -94,7 +96,7 @@
 
 - 重排 3 个 prompt：`WikiSummaryPrompt`、`WikiKnowledgeExtractPrompt`、`WikiCandidateSlugPrompt`。
 - 不动 `WikiChunkCitationPrompt` / `WikiPageModify*`（上游已优化）、`WikiTaxonomyPlanPrompt` / `WikiDeduplicationPrompt`（单次调用无复用收益）。
-- **验证**：独立纯 Go 程序从源文件提取模板渲染，固定指令前缀跨文档字节完全一致：
+- **结构验证（字节稳定，必要条件）**：独立纯 Go 程序从源文件提取模板渲染，固定指令前缀跨文档字节完全一致：
 
 | Prompt | 固定前缀字节数 |
 |---|---|
@@ -102,7 +104,16 @@
 | WikiKnowledgeExtractPrompt | 4494 |
 | WikiCandidateSlugPrompt | 4039 |
 
+- **计费验证（厂商实际缓存 token，充分条件）**：`cmd/wikicachebench` 用同一份 token、只改变块顺序，真实调用 SiliconFlow `deepseek-ai/DeepSeek-V3`，读厂商返回的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`（非字节比例）：
+
+| 场景 | 块顺序 | 命中率（实测） |
+|---|---|---|
+| 重排后（现状） | 固定 instructions 前置 + chunks 后置 | **98.2%**（3 轮冷→热配对，中位数，命中 5760/5866 token） |
+| 重排前（对照） | chunks 前置 + instructions 后置 | **0%**（2 请求全 miss，5760+ token 全按未命中计费） |
+
 批量 ingest 时第 2 个及以后的文档复用这段长指令前缀、免重复计费。配套 `prompts_wiki_test.go` 断言前缀稳定 + 占位符不丢。
+
+> 口径说明：命中率取中位数而非理论 100%，因为 SiliconFlow 缓存是「尽力而为」（TTL 短、多副本负载均衡），3 轮实测里 2 轮命中 98.2%、1 轮未命中——这恰好印证「字节稳定 ≠ 100% 命中」，必须以厂商返回 token 为准，不能用前缀字节比例冒充命中率。
 
 ### M4 · CI 质量门禁
 
@@ -125,7 +136,7 @@
 **做什么**：在同一批文档上比较 8 个解析引擎，给出解析质量的横向基线。
 
 - **指标库** `internal/parsequality/`（不 import `types`、纯字符串函数，可单测）：`TextCoverage`（字符覆盖率，抓丢内容）、`TextSimilarity`（归一化 Levenshtein，抓乱序/乱码）、`StructureFidelity`（Markdown 结构保真，抓拍平）。11 个单测全过。
-- **CLI** `cmd/parsebench/`（simple 引擎）+ `cmd/builtinbench/`（builtin 引擎）：输出 8 引擎能力矩阵 + 两个引擎的实测解析质量。
+- **CLI** `cmd/parsebench/`（simple）+ `cmd/builtinbench/`（builtin）+ `cmd/cloudbench/`（mineru_cloud / paddleocr_vl_cloud，云 key 经环境变量 `MINERU_API_KEY` / `PADDLEOCR_VL_CLOUD_TOKEN` 传入，不落盘不进 git）：输出 8 引擎能力矩阵 + 四个引擎的实测解析质量。
 - **8 引擎能力矩阵**（`docparser.ListAllEngines` 实测）：
 
 | 引擎 | 说明 | 文件类型数 | 本环境可用 |
@@ -134,21 +145,27 @@
 | simple | Go 原生轻量解析 | 17 | ✅ |
 | anydoc | 进程内办公文档转换（Rust） | 16 | ❌（未 `-tags anydoc`） |
 | weknoracloud | 云解析 | 9 | ❌（未配凭证） |
-| mineru / mineru_cloud | MinerU 自托管/云 | 10 | ❌（未配置） |
-| paddleocr_vl / paddleocr_vl_cloud | PaddleOCR-VL 自托管/云 | 6 | ❌（未配置） |
+| mineru | MinerU 自托管 | 10 | ❌（需自部署 GPU 服务） |
+| mineru_cloud | MinerU 云 API | 10 | ✅（云 key，已实测） |
+| paddleocr_vl | PaddleOCR-VL 自托管 | 6 | ❌（需自部署 GPU 服务） |
+| paddleocr_vl_cloud | PaddleOCR-VL 云 API | 6 | ✅（云 token，已实测） |
 
-- **两个引擎实测**（coverage / similarity / structure_fidelity 三指标）：
+- **四个引擎实测**（coverage / similarity / structure_fidelity 三指标）：
 
 | 引擎 | 用例 | 结果 |
 |---|---|---|
 | simple | md 透传 / txt 透传 / csv→表格 | 全 1.0 |
 | builtin | md 透传 / md 表格标准化 / html→markdown | 全 1.0 |
-| builtin | docx 垂直合并表格（真实二进制样本 `docreader/tests/fixtures/issue_2634_vertical_merge.docx`） | coverage 1.0 / similarity 0.85 / structure 1.0 |
+| builtin | docx 垂直合并表格（`docreader/tests/fixtures/issue_2634_vertical_merge.docx`） | coverage 1.0 / similarity 0.85 / structure 1.0 |
+| mineru_cloud | 同上 docx（云 API） | coverage 0.985 / similarity 0.43 / structure 0.5 |
+| paddleocr_vl_cloud | 同上 docx（云 API） | coverage 0.135 / similarity 0.14 / structure 0 |
 
   builtin 引擎通过 DocReader gRPC 实测（`cmd/builtinbench` 直连 50051），其中 **html→markdown**（标题/加粗/列表/链接/表格全部正确还原）是 simple 引擎无法处理的复杂格式——这是「内置引擎处理 complex 格式」能力的量化证据。
 
   docx 这个 case 有特殊价值：golden 是「纵向合并单元格应展开到每一行」的期望输出，而 builtin 引擎实际把合并单元格留空，三指标精确刻画了差异——`structure=1.0`（表格行/列/标题结构完全保真）、`coverage=1.0`（检测方法文字未丢失、只出现在首行）、`similarity=0.85`（合并单元格未展开到 Q0102–Q0104）。这证明评测框架不是「全打满分」，而是能抓住真实的解析缺陷——正是「基线」的意义。
-- **设计要点**：指标库引擎无关，接入任一引擎喂同一份 golden 文档即可横向对比——这是「基线」而非一次性 benchmark。已覆盖 simple（纯 Go 轻量）+ builtin（DocReader 复杂格式 + 二进制 docx）两极。
+
+  **云引擎横向对比（同一 docx、同一 golden，`cmd/cloudbench` 实测）**揭示了两条真实规律：① **引擎分工**——docx 是「文本型」文档，文本引擎 builtin 直接读 OOXML 结构最准（coverage 1.0）；视觉 OCR 引擎 paddleocr_vl_cloud 把它渲染成图片再识别，中文被误识别成阿拉伯字母、几乎全错（coverage 0.135），证明「视觉引擎不擅长文本型 office 文档」。② **格式方言差异**——mineru_cloud 文字几乎全对（coverage 0.985），但输出的是合法内嵌 HTML `<table>`（且正确用 `rowspan=4` 展开了纵向合并），而 `parsequality` 的 `StructureFidelity` 只按 GFM `|` 行计数，故其 `structure=0.5` 反映的是「表格方言差异」而非「结构丢失」。这正是横向基线要如实暴露的引擎间格式不一致——不是每个引擎都适合所有文档类型，选型要看文档画像。
+- **设计要点**：指标库引擎无关，接入任一引擎喂同一份 golden 文档即可横向对比——这是「基线」而非一次性 benchmark。已覆盖 simple（纯 Go 轻量）+ builtin（DocReader 复杂格式 + 二进制 docx）+ 两个云引擎（mineru_cloud / paddleocr_vl_cloud）四极。
 
 ---
 
@@ -196,6 +213,9 @@ go build -o cachebench.exe ./cmd/cachebench && ./cachebench.exe .env
 
 # 5d) M3① 缓存省钱换算（真实 API token 计量）
 go build -o embedcost.exe ./cmd/embedcost && ./embedcost.exe .env
+
+# 5e) M3② prompt 前缀缓存命中率（真实厂商缓存 token 计量）
+go build -o wikicachebench.exe ./cmd/wikicachebench && ./wikicachebench.exe .env
 ```
 
 > 注：import `types` 的包测试在本机受 gojieba cgo 运行时 DLL 缺失影响会崩溃，故门禁/解析质量两个新包刻意不 import `types`，保证 CI 干净 `go test`。这是刻意的工程隔离，详见「已知问题」。
@@ -211,7 +231,7 @@ go build -o embedcost.exe ./cmd/embedcost && ./embedcost.exe .env
 - `internal/models/chat/usage.go` — M2 调用账本旁路写（`UsageRecorder` 注入）
 - `internal/types/model_usage.go` — M2 账本数据模型 + `ComputeCost`
 - `internal/application/repository/model_usage*.go`、`internal/application/service/model_usage.go`、`internal/handler/model_usage.go` — M2 读链路
-- `cmd/evalgate/`、`cmd/parsebench/`、`cmd/builtinbench/`、`cmd/cachebench/`、`cmd/embedcost/` — 五个 CLI（门禁判定 / simple 引擎 / builtin 引擎 / 跨重启缓存 / 缓存省钱换算）
+- `cmd/evalgate/`、`cmd/parsebench/`、`cmd/builtinbench/`、`cmd/cloudbench/`、`cmd/cachebench/`、`cmd/embedcost/`、`cmd/wikicachebench/` — 七个 CLI（门禁判定 / simple 引擎 / builtin 引擎 / 云引擎 / 跨重启缓存 / 缓存省钱换算 / prompt 前缀缓存命中率）
 - `scripts/eval.sh`、`scripts/eval-gate.sh` — 复现/门禁脚本
 - `.github/workflows/eval-gate.yml` — CI 门禁
 - `eval_gate.json`、`docs/eval_gate_regression_fixture.json`、`docs/eval_gate_baseline_fixture.json` — 门禁配置 + 退化/基线双路自证 fixture
@@ -237,18 +257,18 @@ go build -o embedcost.exe ./cmd/embedcost && ./embedcost.exe .env
 
 ## 6. 已知问题与限制
 
-1. **cgo 环境边界（本机 Go 1.27 + `CGO_ENABLED=0`，无可用 gcc 工具链）**：依赖 cgo 库的包（gojieba 分词、pg_query SQL 解析、sqlite-vec/duckdb 向量）在编译或 `go test` 时失败。**能干净编译/测试**：`internal/evalgate`、`internal/parsequality`、`docreader/client`、`docreader/proto` 及四个纯 Go CLI（`cmd/evalgate` / `cmd/builtinbench` / `cmd/cachebench` / `cmd/embedcost`，实测 `CGO_ENABLED=0` 全部编译通过）。**受影响**：`cmd/parsebench`（经 docparser → pg_query）、`cmd/desktop`（sqlite-vec/duckdb）、后端 app（cgo 全链）及 import `types` 的包测试。规避：门禁/解析质量刻意不 import `types`；缓存/解析实测用独立纯 Go 程序复刻算法验证；simple 引擎实测数据已由 parsebench 早前（cgo 工具链可用时）跑出并记录在 M5。
+1. **cgo 环境边界（本机 Go 1.27 + `CGO_ENABLED=0`，无可用 gcc 工具链）**：依赖 cgo 库的包（gojieba 分词、pg_query SQL 解析、sqlite-vec/duckdb 向量）在编译或 `go test` 时失败。**能干净编译/测试**：`internal/evalgate`、`internal/parsequality`、`docreader/client`、`docreader/proto` 及六个纯 Go CLI（`cmd/evalgate` / `cmd/builtinbench` / `cmd/cloudbench` / `cmd/cachebench` / `cmd/embedcost` / `cmd/wikicachebench`，实测 `CGO_ENABLED=0` 全部编译通过）。**受影响**：`cmd/parsebench`（经 docparser → pg_query）、`cmd/desktop`（sqlite-vec/duckdb）、后端 app（cgo 全链）及 import `types` 的包测试。规避：门禁/解析质量刻意不 import `types`；缓存/解析实测用独立纯 Go 程序复刻算法验证；simple 引擎实测数据已由 parsebench 早前（cgo 工具链可用时）跑出并记录在 M5。
 2. **评测依赖真实模型调用**：CI 门禁的 `gate-demo` job 用 fixture 自证（无需模型 Key）；真实评测接入需评审环境配 `EVAL_*` secret + 模型 Key。
-3. **8 引擎中 6 个需外部服务或 Rust 链接**：本机已实测 simple + builtin 两个引擎；其余（anydoc/mineru/paddleocr 等）需外部服务或 Rust 链接，指标库引擎无关，接入引擎即可扩展基线。
+3. **8 引擎中 4 个仍需自托管服务或 Rust 链接**：本机已实测 simple / builtin / mineru_cloud / paddleocr_vl_cloud 四个引擎；其余（anydoc 需 Rust 链接，mineru / paddleocr_vl 自托管需 GPU 服务，weknoracloud 需官方云凭证）指标库引擎无关，接入引擎即可扩展基线。
 4. **跨重启的缓存降幅（已实测）**：`cmd/cachebench` 在真实 PostgreSQL 上证明跨重启 DB 二级缓存命中降幅 100%（30→0）；进程内缓存命中用真实 API 实测（完全重建 100%、增量重建 66.7%）。三级证据（单测 / 真实 API / 真实 DB）齐全。
 
 ---
 
 ## 7. 卓越奖差异化亮点
 
-1. **M5 选做做掉**：8 引擎横向解析质量基线，且已实测 simple + builtin 两个引擎（含 html→markdown 复杂格式还原），绝大多数人放弃的部分。
+1. **M5 选做做掉**：8 引擎横向解析质量基线，已实测 simple / builtin / mineru_cloud / paddleocr_vl_cloud 四个引擎（含 html→markdown 复杂格式还原、云引擎横向对比与「引擎分工/格式方言」发现），绝大多数人放弃的部分。
 2. **门禁自证**：提交降召回 fixture，CI 真的 exit 1 并报出退化指标，比静态代码有说服力。
-3. **实测数字而非形容词**：基线 6 指标精确到 3 位小数、前缀字节数、门禁 delta 值、embedding 缓存降幅（真实 API 实测 100%/66.7%）全部可复现。
+3. **实测数字而非形容词**：基线 6 指标精确到 3 位小数、prompt 前缀缓存命中率（厂商真实缓存 token 实测 98.2% vs 对照 0%）、门禁 delta 值、embedding 缓存降幅（真实 API 实测 100%/66.7%）全部可复现。
 4. **可复现做到极致**：配置全快照落库、时间戳可回溯、一条命令复现、他人可独立验证。
 5. **代码对齐上游**：双库迁移齐全、单测覆盖、刻意工程隔离保证 CI 干净、README 级运行说明。
 
