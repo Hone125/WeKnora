@@ -1,42 +1,20 @@
-name: Real Eval Quality Gate
+name: Embedding Cache Hit Experiment
 
-# 真实检索评测门禁（课题三 · 验收 B）。
+# 热缓存命中实验（课题三 · 成本可观测 · 验收）。
 #
-# 与 eval-gate.yml 的 gate-demo（用写死 fixture 验证门禁逻辑）不同，本 workflow
-# 在 CI 里起一个最小后端环境（postgres 带 pgvector + redis + 编译启动 server），
-# 用真实模型 Key 跑一遍 30 题默认数据集评测，再用 evalgate 判定召回是否退化。
-# 详细方案与操作手册见 docs/rhino-topic3-real-eval-ci.md。
+# 与 topic3-eval-real.yml 的「真实门禁」不同，本 workflow 在 CI 里起最小后端环境
+# （postgres 带 pgvector + redis + 编译启动 server），在同一 server 进程内连续跑
+# 两遍同一默认数据集评测：第一遍冷缓存（全部 miss、真实 HTTP 调用），第二遍热缓存
+# （应命中进程内/DB 缓存、HTTP 调用骤降）。用 embedding 直接计数量化「缓存省了多少
+# 次真实 provider 往返」，而不是靠缓存表行数猜。详细方案见 docs/。
 #
-# 触发：真实评测消耗模型额度（真金白银），只在以下时机跑——
-#   workflow_dispatch  手动触发（首次落地先跑这个）
-#   schedule           每周一一次，作为长期质量基线
-#   pull_request       改到检索/评测相关路径时拦截降召回
+# 触发：一次性受控实验，只在 workflow_dispatch 手动触发（会消耗真实模型额度）。
 
 on:
   workflow_dispatch:
-    inputs:
-      regression_probe:
-        description: '真实退化实验：提高检索阈值，预期门禁失败；不修改成绩或基线'
-        type: boolean
-        default: false
-  schedule:
-    # 每周一 UTC 17:43（避开整点，错峰触发）
-    - cron: "43 17 * * 1"
-  pull_request:
-    paths:
-      - "internal/**"
-      - "cmd/**"
-      - "dataset/**"
-      - "config/**"
-      - "eval_gate.json"
-      - "scripts/eval-runner.mjs"
-      - "scripts/eval-gate.sh"
-      - "scripts/eval.sh"
-      - "scripts/ci-eval.sh"
-      - ".github/workflows/topic3-eval-real.yml"
 
 concurrency:
-  group: real-eval-${{ github.workflow }}-${{ github.ref }}
+  group: cache-hit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -55,14 +33,13 @@ env:
   REDIS_ADDR: 127.0.0.1:6379
   RETRIEVE_DRIVER: postgres
   AUTO_MIGRATE: "true"
-  # AES-256 主密钥必须恰好 32 字节（internal/runtime/startup.go 会校验）。
   SYSTEM_AES_KEY: "0123456789abcdef0123456789abcdef"
   JWT_SECRET: ci-jwt-secret
   STORAGE_TYPE: local
   LOCAL_STORAGE_BASE_DIR: /tmp/weknora-ci/files
   GIN_MODE: release
 
-  # ===== 模型配置（敏感值来自 Secrets；变量名是 builtin_models.yaml 里 ${NAME} 占位符要读的名字）=====
+  # ===== 模型配置（敏感值来自 Secrets）=====
   LLM_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
   LLM_MODEL_NAME: ${{ secrets.EVAL_LLM_MODEL_NAME }}
   LLM_BASE_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
@@ -80,13 +57,11 @@ env:
   EVAL_TIMEOUT_MS: "1800000"
 
 jobs:
-  real-eval:
-    name: real evaluation quality gate
+  cache-hit:
+    name: embedding cache hit experiment
     runs-on: ubuntu-latest
     timeout-minutes: 45
     services:
-      # 与项目 docker-compose.yml 官方选择一致：ParadeDB 自带 pgvector 扩展，
-      # AUTO_MIGRATE 自动建表 + 建向量列 + 向量检索都不会踩「扩展没装」的坑。
       postgres:
         image: paradedb/paradedb:v0.22.2-pg17
         env:
@@ -122,13 +97,12 @@ jobs:
         with:
           node-version: "22"
 
-      # 缺必需 Secret 时在这里显式报错，而不是等 server 起来、评测跑到一半才失败。
       - name: Check required model secrets
         run: |
           missing=0
           for v in LLM_API_KEY LLM_MODEL_NAME LLM_BASE_URL EMBEDDING_API_KEY EMBEDDING_MODEL_NAME EMBEDDING_BASE_URL; do
             if [ -z "${!v}" ]; then
-              echo "::error::缺少 repository secret EVAL_${v}（见 docs/rhino-topic3-real-eval-ci.md 第 4.1 节）"
+              echo "::error::缺少 repository secret EVAL_${v}"
               missing=1
             fi
           done
@@ -137,8 +111,6 @@ jobs:
       - name: Build server
         run: go build -o bin/server ./cmd/server
 
-      # 生成声明式模型清单；${NAME} 占位符保持字面量，由 server 启动时
-      # LoadBuiltinModelsConfig 从环境变量读取真实值（<<'EOF' 不做 shell 展开）。
       - name: Generate builtin_models.yaml
         run: |
           mkdir -p /tmp/weknora-ci
@@ -166,18 +138,10 @@ jobs:
           EOF
           echo "✅ builtin_models.yaml 已生成"
 
-      - name: Start server and run real evaluation + gate
-        env:
-          # Deliberately restrictive search configuration for an opt-in negative
-          # experiment. Normal PR/scheduled runs retain the committed config.
-          # vector_threshold/keyword_threshold 都是 [0,1] 的「最低分阈值」，
-          # 0.99 表示只保留相似度/匹配分 ≥ 0.99 的结果 → 召回暴跌、门禁应报回归。
-          CONVERSATION_VECTOR_THRESHOLD: ${{ inputs.regression_probe && '0.99' || '' }}
-          CONVERSATION_KEYWORD_THRESHOLD: ${{ inputs.regression_probe && '0.99' || '' }}
+      - name: Start server and run cache-hit experiment
         run: |
           export BUILTIN_MODELS_CONFIG=/tmp/weknora-ci/builtin_models.yaml
           mkdir -p /tmp/weknora-ci/files
-          # 在同一 step 内启动 server 并跑评测，避免后台进程在 step 边界被回收。
           nohup ./bin/server > /tmp/weknora-ci/server.log 2>&1 &
           SERVER_PID=$!
           echo "server pid=${SERVER_PID}"
@@ -188,16 +152,7 @@ jobs:
             exit 1
           fi
           echo "✅ server 进程存活，开始等待迁移与模型注册"
-          # 等健康 → 注册账号 → 跑评测 + 门禁；退出码透传（0 通过 / 1 退化 / 2 错误）。
-          bash scripts/ci-eval.sh
-
-      - name: Upload eval evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: eval-evidence
-          path: eval-results/
-          if-no-files-found: ignore
+          bash scripts/cache-hit-ci.sh
 
       - name: Upload server log
         if: always()
