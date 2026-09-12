@@ -85,6 +85,10 @@ func (h *ModelUsageHandler) GetOverview(c *gin.Context) {
 		end = parsed
 	}
 
+	if start.After(end) {
+		c.Error(errors.NewBadRequestError("start must not be after end"))
+		return
+	}
 	rows, err := h.service.GetOverview(ctx, start, end)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)

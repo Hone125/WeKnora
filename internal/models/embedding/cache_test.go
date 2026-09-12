@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
 )
 
 // countingEmbedder 记录 Embed/BatchEmbed 调用次数，返回确定性向量（长度=len(text)），
@@ -263,7 +265,27 @@ func TestCacheEmbedderDifferentModelsDoNotCollide(t *testing.T) {
 	if ea, _ := innerA.callCounts(); ea != 1 {
 		t.Fatalf("model-a should have 1 provider call, got %d", ea)
 	}
-	if eb, _ := innerB.callCounts(); eb != 2 {
-		t.Fatalf("model-b should have 2 provider calls (no cross-model hit), got %d", eb)
+	if eb, _ := innerB.callCounts(); eb != 1 {
+		t.Fatalf("model-b should call once, then reuse its own cache; got %d", eb)
+	}
+}
+
+func TestCacheWithConcurrencyWrapperReusesPooledBatch(t *testing.T) {
+	t.Setenv("EMBEDDING_CACHE_SIZE", "16")
+	t.Setenv("BATCH_EMBED_SIZE", "1")
+	pool, err := ants.NewPool(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Release()
+	provider := &countingEmbedder{id: "pooled-regression", dim: 1, pooler: NewBatchEmbedder(pool)}
+	cached := wrapEmbeddingCache(wrapEmbeddingConcurrency(provider, 0))
+	for i := 0; i < 2; i++ {
+		if _, err := cached.BatchEmbedWithPool(context.Background(), cached, []string{"a", "b"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, calls := provider.callCounts(); calls != 2 {
+		t.Fatalf("pooled batch bypassed cache: calls=%d, want 2 cold calls only", calls)
 	}
 }

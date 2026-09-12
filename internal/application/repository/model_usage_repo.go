@@ -55,7 +55,8 @@ func (r *modelUsageRepository) Aggregate(
 		query = query.Where("created_at >= ?", start)
 	}
 	if !end.IsZero() {
-		query = query.Where("created_at <= ?", end)
+		// Half-open interval avoids double-counting midnight across adjacent days.
+		query = query.Where("created_at < ?", end)
 	}
 
 	query = query.Group("model_id, model_type").Order("call_count DESC")

@@ -48,7 +48,11 @@ func (w *concurrencyEmbedder) BatchEmbed(ctx context.Context, texts []string) ([
 func (w *concurrencyEmbedder) BatchEmbedWithPool(
 	ctx context.Context, model Embedder, texts []string,
 ) ([][]float32, error) {
-	return w.inner.BatchEmbedWithPool(ctx, w, texts)
+	// Preserve the outer decorator; cache misses still enter our gate.
+	if model == nil {
+		model = w
+	}
+	return w.inner.BatchEmbedWithPool(ctx, model, texts)
 }
 
 func (w *concurrencyEmbedder) GetModelName() string { return w.inner.GetModelName() }

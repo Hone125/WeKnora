@@ -216,7 +216,7 @@ export function getModelUsage(start?: string, end?: string): Promise<ModelUsageA
         if (response.success && Array.isArray(response.data)) {
           resolve(response.data);
         } else {
-          resolve([]);
+          reject(new Error('模型用量响应无效，请检查服务端账本状态'));
         }
       })
       .catch((error: any) => {

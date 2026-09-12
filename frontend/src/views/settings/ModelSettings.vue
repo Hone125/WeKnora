@@ -386,19 +386,24 @@ const loadModels = async () => {
 }
 
 // 加载模型用量与成本概览（默认最近 7 天，可按时间区间筛选）
+let usageRequestVersion = 0
 const loadUsage = async () => {
+  const requestVersion = ++usageRequestVersion
   usageLoading.value = true
   usageError.value = ''
   try {
     const [s, e] = usageTimeRange.value || []
-    // 后端 parseTimeQuery 支持 RFC3339；用 UTC 整天区间避免时区歧义
-    const start = s ? `${s}T00:00:00Z` : undefined
-    const end = e ? `${e}T23:59:59Z` : undefined
-    usageRows.value = await getModelUsage(start, end)
+    // Picker dates are local calendar days; convert their boundaries to UTC.
+    // The server uses [start, end), so end is midnight of the following day.
+    const startDate = s ? new Date(`${s}T00:00:00`) : undefined
+    const endDate = e ? new Date(`${e}T00:00:00`) : undefined
+    if (endDate) endDate.setDate(endDate.getDate() + 1)
+    const rows = await getModelUsage(startDate?.toISOString(), endDate?.toISOString())
+    if (requestVersion === usageRequestVersion) usageRows.value = rows
   } catch (error: any) {
-    usageError.value = error?.message || '加载成本数据失败'
+    if (requestVersion === usageRequestVersion) usageError.value = error?.message || '加载成本数据失败'
   } finally {
-    usageLoading.value = false
+    if (requestVersion === usageRequestVersion) usageLoading.value = false
   }
 }
 
@@ -421,6 +426,7 @@ const formatHitRate = (rate: number): string => {
 
 // 费用格式化：保留 4 位小数（单价按每百万 token 计，单次聚合金额通常很小）
 const formatCost = (cost: number, currency: string): string => {
+  if (!currency) return '未配置单价'
   if (cost == null || Number.isNaN(cost)) return '—'
   const num = Number(cost)
   const fixed = num >= 1 ? num.toFixed(2) : num.toFixed(4)

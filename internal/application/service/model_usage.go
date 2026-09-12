@@ -24,7 +24,7 @@ func NewModelUsageService(
 	return &modelUsageService{usageRepo: usageRepo, modelRepo: modelRepo}
 }
 
-// GetOverview 返回当前租户在 [start, end] 时间区间内按模型聚合的
+// GetOverview 返回当前租户在 [start, end) 时间区间内按模型聚合的
 // 调用量、缓存命中率与费用。费用按模型当前定价即时计算，不固化在账本里。
 func (s *modelUsageService) GetOverview(
 	ctx context.Context,

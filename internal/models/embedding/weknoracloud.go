@@ -154,7 +154,10 @@ func (e *WeKnoraCloudEmbedder) BatchEmbed(ctx context.Context, texts []string) (
 }
 
 func (e *WeKnoraCloudEmbedder) BatchEmbedWithPool(ctx context.Context, model Embedder, texts []string) ([][]float32, error) {
-	return e.BatchEmbed(ctx, texts)
+	if model == nil {
+		model = e
+	}
+	return model.BatchEmbed(ctx, texts)
 }
 
 func (e *WeKnoraCloudEmbedder) SetSupportsDimensionOverride(supported bool) {
