@@ -7,7 +7,7 @@
 
 ---
 
-> **2026-09-12 验收复核（最新）：真实检索链路与缓存的前后实测已在云端 CI 补齐直接计数证据。** 门禁真实拦截退化（run 34684475268，6 指标报回归，见 M4）、缓存冷 36→热 0 次真实 HTTP（run 34684838421，DB 命中 60，见 M3①）、冷缓存直接计数（run 34681726847）。仍保留的口径边界：Wiki 固定前缀字节数 ≠ 厂商缓存命中率（厂商真实 token 实测另见 M3②）；结果保存在 `evaluation_tasks`，未另建 `evaluation_results` 表。请结合 [验收整改记录](rhino-topic3-acceptance-audit.md) 阅读。
+> **2026-09-12 验收复核（最新）：四条验收项全部拿到云端 CI 直接计数证据。** 门禁真实拦截退化（run 34684475268，6 指标报回归，见 M4）、缓存冷 36→热 0 次真实 HTTP（run 34684838421 / 34688598889，DB 命中 60，见 M3①）、冷缓存直接计数（run 34681726847）、账本真实写入（run 34688598889，62 次调用 103,828 token 从 `/api/v1/models/usage` 查出，见 M2）。仍保留的口径边界：Wiki 固定前缀字节数 ≠ 厂商缓存命中率（厂商真实 token 实测另见 M3②）；结果保存在 `evaluation_tasks`，未另建 `evaluation_results` 表。请结合 [验收整改记录](rhino-topic3-acceptance-audit.md) 阅读。
 
 ## 0. 一句话成果
 
@@ -66,6 +66,7 @@
 - **覆盖**：remote_api / openai_stream / ollama / anthropic（含流式）。
 - **读链路**：`GET /api/v1/models/usage` 聚合 + 关联模型定价即时算费；前端 `ModelSettings.vue` 表格。
 - **迁移**：PG `000092` / SQLite `000014`。
+- **云端 CI 端到端直接证据（run 34688598889）**：真实评测跑完后 `scripts/usage-check.mjs` 查 `/api/v1/models/usage`，账本真实写入 1 行（`ci-llm-default`）——62 次调用、prompt 93,434 / completion 10,394 / total 103,828 token，从接口按模型聚合查出。证明账本不是停留在代码+单测，而是真实调用链 → `model_usages` 表 → 聚合接口的闭环。`cost=0` 因 CI 临时模型未配价格，恰好印证「账本只存 token 量、金额按模型定价即时算」的设计取舍。
 
 **为什么单价放进模型配置而非硬编码**：价格易变、按厂商/模型区分，账本固化了金额价格一改历史就失真。账本存 token 量，查询时用模型当前定价即时计算。
 
