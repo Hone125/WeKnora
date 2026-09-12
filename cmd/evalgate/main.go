@@ -78,6 +78,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	fmt.Fprintln(stdout, string(out))
+	if len(report.Errors) != 0 {
+		return 2
+	}
 
 	if report.Passed {
 		return 0

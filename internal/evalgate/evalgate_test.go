@@ -86,25 +86,25 @@ func TestJudgeGate_ImprovementNeverFails(t *testing.T) {
 	}
 }
 
-func TestJudgeGate_SkipsMetricsMissingBaseline(t *testing.T) {
+func TestJudgeGate_RejectsMetricsMissingBaseline(t *testing.T) {
 	cfg := GateConfig{
 		Baseline:   map[string]float64{"recall": 0.5},
 		Thresholds: map[string]float64{"recall": 0.05, "unknown": 0.1},
 	}
 	// "unknown" 在 Thresholds 但不在 Baseline → 跳过，不 fail。
-	if report := JudgeGate(map[string]float64{"recall": 0.6}, cfg); !report.Passed {
-		t.Fatalf("missing baseline should skip, not fail: %+v", report.Regressions)
+	if report := JudgeGate(map[string]float64{"recall": 0.6}, cfg); report.Passed || len(report.Errors) == 0 {
+		t.Fatalf("missing baseline must fail: %+v", report)
 	}
 }
 
-func TestJudgeGate_SkipsMetricsMissingFromCurrent(t *testing.T) {
+func TestJudgeGate_RejectsMetricsMissingFromCurrent(t *testing.T) {
 	cfg := GateConfig{
 		Baseline:   map[string]float64{"recall": 0.5, "mrr": 0.5},
 		Thresholds: map[string]float64{"recall": 0.05, "mrr": 0.05},
 	}
 	// current 缺 mrr → 只判定 recall；recall 通过 → 整体通过。
-	if report := JudgeGate(map[string]float64{"recall": 0.55}, cfg); !report.Passed {
-		t.Fatalf("missing current metric should skip, not fail: %+v", report.Regressions)
+	if report := JudgeGate(map[string]float64{"recall": 0.55}, cfg); report.Passed || len(report.Errors) == 0 {
+		t.Fatalf("missing current metric must fail: %+v", report)
 	}
 }
 
@@ -171,11 +171,8 @@ func TestFlattenEvaluationResponse(t *testing.T) {
 
 func TestFlattenEvaluationResponse_MissingMetric(t *testing.T) {
 	// metric 缺失（如任务失败）→ 返回空 map 而非 panic，交给调用方处理。
-	flat, err := FlattenEvaluationResponse([]byte(`{"data":{}}`))
-	if err != nil {
-		t.Fatalf("flatten: %v", err)
-	}
-	if len(flat) != 0 {
-		t.Fatalf("expected empty map, got %+v", flat)
+	_, err := FlattenEvaluationResponse([]byte(`{"data":{}}`))
+	if err == nil {
+		t.Fatal("missing metrics must fail")
 	}
 }

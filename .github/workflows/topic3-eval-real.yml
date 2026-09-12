@@ -1,0 +1,196 @@
+name: Real Eval Quality Gate
+
+# 真实检索评测门禁（课题三 · 验收 B）。
+#
+# 与 eval-gate.yml 的 gate-demo（用写死 fixture 验证门禁逻辑）不同，本 workflow
+# 在 CI 里起一个最小后端环境（postgres 带 pgvector + redis + 编译启动 server），
+# 用真实模型 Key 跑一遍 30 题默认数据集评测，再用 evalgate 判定召回是否退化。
+# 详细方案与操作手册见 docs/rhino-topic3-real-eval-ci.md。
+#
+# 触发：真实评测消耗模型额度（真金白银），只在以下时机跑——
+#   workflow_dispatch  手动触发（首次落地先跑这个）
+#   schedule           每周一一次，作为长期质量基线
+#   pull_request       改到检索/评测相关路径时拦截降召回
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每周一 UTC 17:43（避开整点，错峰触发）
+    - cron: "43 17 * * 1"
+  pull_request:
+    paths:
+      - "internal/**"
+      - "cmd/**"
+      - "dataset/**"
+      - "config/**"
+      - "eval_gate.json"
+      - "scripts/eval-runner.mjs"
+      - "scripts/eval-gate.sh"
+      - "scripts/eval.sh"
+      - "scripts/ci-eval.sh"
+      - ".github/workflows/topic3-eval-real.yml"
+
+concurrency:
+  group: real-eval-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+  # ===== 运行环境（CI 临时实例固定值，非敏感）=====
+  DB_DRIVER: postgres
+  DB_HOST: 127.0.0.1
+  DB_PORT: "5432"
+  DB_USER: weknora
+  DB_PASSWORD: weknora-pass
+  DB_NAME: weknora
+  REDIS_ADDR: 127.0.0.1:6379
+  RETRIEVE_DRIVER: postgres
+  AUTO_MIGRATE: "true"
+  # AES-256 主密钥必须恰好 32 字节（internal/runtime/startup.go 会校验）。
+  SYSTEM_AES_KEY: "0123456789abcdef0123456789abcdef"
+  JWT_SECRET: ci-jwt-secret
+  STORAGE_TYPE: local
+  LOCAL_STORAGE_BASE_DIR: /tmp/weknora-ci/files
+  GIN_MODE: release
+
+  # ===== 模型配置（敏感值来自 Secrets；变量名是 builtin_models.yaml 里 ${NAME} 占位符要读的名字）=====
+  LLM_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+  LLM_MODEL_NAME: ${{ secrets.EVAL_LLM_MODEL_NAME }}
+  LLM_BASE_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
+  LLM_PROVIDER: ${{ secrets.EVAL_LLM_PROVIDER || 'openai' }}
+  EMBEDDING_API_KEY: ${{ secrets.EVAL_EMBEDDING_API_KEY }}
+  EMBEDDING_MODEL_NAME: ${{ secrets.EVAL_EMBEDDING_MODEL_NAME }}
+  EMBEDDING_BASE_URL: ${{ secrets.EVAL_EMBEDDING_BASE_URL }}
+  EMBEDDING_PROVIDER: ${{ secrets.EVAL_EMBEDDING_PROVIDER || 'openai' }}
+  EMBEDDING_DIMENSION: ${{ secrets.EVAL_EMBEDDING_DIMENSION || '1024' }}
+
+  # ===== 评测客户端 =====
+  BASE_URL: http://localhost:8080
+  EVAL_EMAIL: ci-eval@weknora.local
+  EVAL_PASSWORD: ci-eval-pass-123
+  EVAL_TIMEOUT_MS: "1800000"
+
+jobs:
+  real-eval:
+    name: real evaluation quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      # 与项目 docker-compose.yml 官方选择一致：ParadeDB 自带 pgvector 扩展，
+      # AUTO_MIGRATE 自动建表 + 建向量列 + 向量检索都不会踩「扩展没装」的坑。
+      postgres:
+        image: paradedb/paradedb:v0.22.2-pg17
+        env:
+          POSTGRES_USER: weknora
+          POSTGRES_PASSWORD: weknora-pass
+          POSTGRES_DB: weknora
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weknora -d weknora"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 缺必需 Secret 时在这里显式报错，而不是等 server 起来、评测跑到一半才失败。
+      - name: Check required model secrets
+        run: |
+          missing=0
+          for v in LLM_API_KEY LLM_MODEL_NAME LLM_BASE_URL EMBEDDING_API_KEY EMBEDDING_MODEL_NAME EMBEDDING_BASE_URL; do
+            if [ -z "${!v}" ]; then
+              echo "::error::缺少 repository secret EVAL_${v}（见 docs/rhino-topic3-real-eval-ci.md 第 4.1 节）"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Build server
+        run: go build -o bin/server ./cmd/server
+
+      # 生成声明式模型清单；${NAME} 占位符保持字面量，由 server 启动时
+      # LoadBuiltinModelsConfig 从环境变量读取真实值（<<'EOF' 不做 shell 展开）。
+      - name: Generate builtin_models.yaml
+        run: |
+          mkdir -p /tmp/weknora-ci
+          cat > /tmp/weknora-ci/builtin_models.yaml <<'EOF'
+          builtin_models:
+            - id: ci-embedding-default
+              type: Embedding
+              is_default: true
+              name: ${EMBEDDING_MODEL_NAME}
+              parameters:
+                base_url: ${EMBEDDING_BASE_URL}
+                api_key: ${EMBEDDING_API_KEY}
+                provider: ${EMBEDDING_PROVIDER}
+                embedding_parameters:
+                  dimension: ${EMBEDDING_DIMENSION}
+                  truncate_prompt_tokens: 0
+            - id: ci-llm-default
+              type: KnowledgeQA
+              is_default: true
+              name: ${LLM_MODEL_NAME}
+              parameters:
+                base_url: ${LLM_BASE_URL}
+                api_key: ${LLM_API_KEY}
+                provider: ${LLM_PROVIDER}
+          EOF
+          echo "✅ builtin_models.yaml 已生成"
+
+      - name: Start server and run real evaluation + gate
+        run: |
+          export BUILTIN_MODELS_CONFIG=/tmp/weknora-ci/builtin_models.yaml
+          mkdir -p /tmp/weknora-ci/files
+          # 在同一 step 内启动 server 并跑评测，避免后台进程在 step 边界被回收。
+          nohup ./bin/server > /tmp/weknora-ci/server.log 2>&1 &
+          SERVER_PID=$!
+          echo "server pid=${SERVER_PID}"
+          sleep 3
+          if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+            echo "::error::server 启动后立即退出，日志："
+            tail -n 60 /tmp/weknora-ci/server.log || true
+            exit 1
+          fi
+          echo "✅ server 进程存活，开始等待迁移与模型注册"
+          # 等健康 → 注册账号 → 跑评测 + 门禁；退出码透传（0 通过 / 1 退化 / 2 错误）。
+          bash scripts/ci-eval.sh
+
+      - name: Upload eval evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-evidence
+          path: eval-results/
+          if-no-files-found: ignore
+
+      - name: Upload server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: /tmp/weknora-ci/server.log
+          if-no-files-found: ignore

@@ -14,6 +14,7 @@ package evalgate
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 )
@@ -43,6 +44,7 @@ type MetricRegression struct {
 
 // GateReport is the result of judging a run against the gate.
 type GateReport struct {
+	Errors      []string           `json:"errors,omitempty"`
 	Passed      bool               `json:"passed"`                // true when no gated metric regressed
 	Regressions []MetricRegression `json:"regressions,omitempty"` // gated metrics that regressed beyond tolerance
 }
@@ -66,10 +68,13 @@ func LoadGateConfig(path string) (GateConfig, error) {
 // JudgeGate compares a run's metrics against the gate and returns a report.
 //
 // current is a flat map of metric name -> measured value. Only metrics named in
-// cfg.Thresholds are gated; if a gated metric is missing from current it is
-// skipped (a missing metric is a data problem, not a quality regression).
+// cfg.Thresholds are gated. Missing or invalid data fails closed and is
+// reported separately from a measured quality regression.
 func JudgeGate(current map[string]float64, cfg GateConfig) GateReport {
 	report := GateReport{Passed: true, Regressions: []MetricRegression{}}
+	if len(cfg.Thresholds) == 0 {
+		return GateReport{Passed: false, Errors: []string{"no thresholds configured"}}
+	}
 
 	// Iterate in a stable order so the report is deterministic.
 	metrics := make([]string, 0, len(cfg.Thresholds))
@@ -81,13 +86,24 @@ func JudgeGate(current map[string]float64, cfg GateConfig) GateReport {
 	for _, metric := range metrics {
 		base, ok := cfg.Baseline[metric]
 		if !ok {
-			continue // baseline not declared: nothing to compare against
+			report.Passed = false
+			report.Errors = append(report.Errors, "missing baseline: "+metric)
+			continue
 		}
 		cur, ok := current[metric]
 		if !ok {
-			continue // metric not reported this run: skip, not a regression
+			report.Passed = false
+			report.Errors = append(report.Errors, "missing current metric: "+metric)
+			continue
 		}
 		tol := cfg.Thresholds[metric]
+		if math.IsNaN(base) || math.IsInf(base, 0) || base < 0 || base > 1 ||
+			math.IsNaN(cur) || math.IsInf(cur, 0) || cur < 0 || cur > 1 ||
+			math.IsNaN(tol) || math.IsInf(tol, 0) || tol < 0 || tol > 1 {
+			report.Passed = false
+			report.Errors = append(report.Errors, "invalid value or tolerance: "+metric)
+			continue
+		}
 		delta := cur - base
 		if delta < -tol {
 			report.Passed = false
@@ -113,21 +129,39 @@ func JudgeGate(current map[string]float64, cfg GateConfig) GateReport {
 func FlattenEvaluationResponse(raw []byte) (map[string]float64, error) {
 	var payload struct {
 		Data struct {
+			Task *struct {
+				Status int `json:"status"`
+			} `json:"task"`
 			Metric struct {
-				Retrieval  map[string]float64 `json:"retrieval_metrics"`
-				Generation map[string]float64 `json:"generation_metrics"`
+				Retrieval  map[string]*float64 `json:"retrieval_metrics"`
+				Generation map[string]*float64 `json:"generation_metrics"`
 			} `json:"metric"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("parse evaluation response: %w", err)
 	}
+	if payload.Data.Task != nil && payload.Data.Task.Status != 2 {
+		return nil, fmt.Errorf("evaluation task is not successful: status=%d", payload.Data.Task.Status)
+	}
 	out := make(map[string]float64, len(payload.Data.Metric.Retrieval)+len(payload.Data.Metric.Generation))
 	for k, v := range payload.Data.Metric.Retrieval {
-		out[k] = v
+		if v == nil {
+			return nil, fmt.Errorf("null retrieval metric: %s", k)
+		}
+		out[k] = *v
 	}
 	for k, v := range payload.Data.Metric.Generation {
-		out[k] = v
+		if v == nil {
+			return nil, fmt.Errorf("null generation metric: %s", k)
+		}
+		if _, exists := out[k]; exists {
+			return nil, fmt.Errorf("duplicate metric across retrieval and generation: %s", k)
+		}
+		out[k] = *v
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("evaluation response contains no metrics")
 	}
 	return out, nil
 }

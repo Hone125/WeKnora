@@ -20,7 +20,11 @@ on:
       - "cmd/evalgate/**"
       - "eval_gate.json"
       - "scripts/eval-gate.sh"
+      - "scripts/eval.sh"
+      - "scripts/eval-runner.mjs"
+      - "scripts/eval-runner.test.mjs"
       - "docs/eval_gate_regression_fixture.json"
+      - "docs/eval_gate_baseline_fixture.json"
       - ".github/workflows/eval-gate.yml"
 
 concurrency:
@@ -45,7 +49,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
       - name: Test internal/evalgate
-        run: go test ./internal/evalgate/
+        run: go test ./internal/evalgate/ ./cmd/evalgate/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test evaluation HTTP client failure handling
+        run: node --test scripts/eval-runner.test.mjs
 
   gate-demo:
     name: gate blocks recall regression
@@ -76,8 +85,7 @@ jobs:
       - name: Gate must PASS a healthy result
         run: |
           set +e
-          printf '%s' '{"data":{"metric":{"retrieval_metrics":{"recall":0.55,"precision":0.12}}}}' \
-            | ./evalgate -config eval_gate.json
+          ./evalgate -config eval_gate.json -result docs/eval_gate_baseline_fixture.json
           code=$?
           set -e
           echo "gate exit=$code"
