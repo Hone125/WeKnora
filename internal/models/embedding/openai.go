@@ -149,7 +149,17 @@ func (e *OpenAIEmbedder) doRequestWithRetry(ctx context.Context, jsonData []byte
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
 		secutils.ApplyCustomHeaders(req, e.customHeaders)
 
+		measure(ctx, func(s *MeasurementSnapshot) {
+			s.HTTPAttempts++
+			var body OpenAIEmbedRequest
+			if json.Unmarshal(jsonData, &body) == nil {
+				s.HTTPInputItems += int64(len(body.Input))
+			}
+		})
 		resp, err = e.httpClient.Do(req)
+		if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			measure(ctx, func(s *MeasurementSnapshot) { s.HTTPFailures++ })
+		}
 		if err == nil {
 			return resp, nil
 		}

@@ -38,12 +38,12 @@ import (
 )
 
 const (
-	mineruBaseURL  = "https://mineru.net/api/v4"
-	paddleBaseURL  = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
-	paddleModel    = "PaddleOCR-VL-1.6"
-	pollInterval   = 3 * time.Second
-	engineTimeout  = 180 * time.Second
-	httpTimeout    = 60 * time.Second
+	mineruBaseURL = "https://mineru.net/api/v4"
+	paddleBaseURL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
+	paddleModel   = "PaddleOCR-VL-1.6"
+	pollInterval  = 3 * time.Second
+	engineTimeout = 180 * time.Second
+	httpTimeout   = 60 * time.Second
 )
 
 // probe is one input document fed to each cloud engine. `golden` is the
@@ -381,10 +381,10 @@ type paddleSubmitResponse struct {
 }
 
 type paddlePollResponse struct {
-	Code int    `json:"code"`
+	Code int `json:"code"`
 	Data struct {
-		State    string `json:"state"`
-		ErrorMsg string `json:"errorMsg"`
+		State     string `json:"state"`
+		ErrorMsg  string `json:"errorMsg"`
 		ResultURL struct {
 			JSONURL string `json:"jsonUrl"`
 		} `json:"resultUrl"`

@@ -143,7 +143,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     metadata.exit_code = exitCode;
     const { metric, cost, task } = payload.data;
     console.log(JSON.stringify({ task: task.id, retrieval: metric.retrieval_metrics,
-      generation: metric.generation_metrics, token_usage: cost, cost_note: 'Token 用量不等于货币费用', evidence: output }, null, 2));
+      generation: metric.generation_metrics, token_usage: cost,
+      embedding_measurement: metric.embedding_measurement,
+      cost_note: 'Token 用量不等于货币费用', evidence: output }, null, 2));
     return exitCode;
   } catch (error) {
     metadata.exit_code = 2;

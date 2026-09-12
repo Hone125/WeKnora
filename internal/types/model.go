@@ -27,9 +27,9 @@ const (
 // 账本（model_usages）只存 token 量、不存金额，避免价格变动导致历史金额失真。
 // 三档中 cached_input_per_million 为空时，读取端回落 input_per_million。
 type ModelPricing struct {
-	Currency              string  `yaml:"currency"                 json:"currency"`                            // 货币单位，如 CNY / USD
-	InputPerMillion       float64 `yaml:"input_per_million"        json:"input_per_million"`                 // 输入 token 每 1M 单价
-	OutputPerMillion      float64 `yaml:"output_per_million"       json:"output_per_million"`                // 输出 token 每 1M 单价
+	Currency              string  `yaml:"currency"                 json:"currency"`                           // 货币单位，如 CNY / USD
+	InputPerMillion       float64 `yaml:"input_per_million"        json:"input_per_million"`                  // 输入 token 每 1M 单价
+	OutputPerMillion      float64 `yaml:"output_per_million"       json:"output_per_million"`                 // 输出 token 每 1M 单价
 	CachedInputPerMillion float64 `yaml:"cached_input_per_million" json:"cached_input_per_million,omitempty"` // 缓存命中输入 token 每 1M 单价，空则回落 input
 }
 

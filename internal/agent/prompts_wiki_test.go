@@ -281,18 +281,18 @@ func TestWikiPrompt_PreservesPlaceholders(t *testing.T) {
 		fields []string
 	}{
 		{
-			name: "WikiSummaryPrompt",
-			tmpl: WikiSummaryPrompt,
+			name:   "WikiSummaryPrompt",
+			tmpl:   WikiSummaryPrompt,
 			fields: []string{"{{.Content}}", "{{.ExtractedSlugs}}", "{{.Language}}"},
 		},
 		{
-			name: "WikiKnowledgeExtractPrompt",
-			tmpl: WikiKnowledgeExtractPrompt,
+			name:   "WikiKnowledgeExtractPrompt",
+			tmpl:   WikiKnowledgeExtractPrompt,
 			fields: []string{"{{.Content}}", "{{.PreviousSlugs}}", "{{.Language}}"},
 		},
 		{
-			name: "WikiCandidateSlugPrompt",
-			tmpl: WikiCandidateSlugPrompt,
+			name:   "WikiCandidateSlugPrompt",
+			tmpl:   WikiCandidateSlugPrompt,
 			fields: []string{"{{.Content}}", "{{.PreviousSlugs}}", "{{.Language}}", "{{.Granularity}}", "{{.GranularityGuidance}}"},
 		},
 	}

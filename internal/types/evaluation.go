@@ -86,8 +86,11 @@ type MetricInput struct {
 
 // MetricResult contains evaluation metrics
 type MetricResult struct {
-	RetrievalMetrics  RetrievalMetrics  `json:"retrieval_metrics"`  // Retrieval performance metrics
-	GenerationMetrics GenerationMetrics `json:"generation_metrics"` // Text generation quality metrics
+	// Optional direct counters; absent on historical records. HTTP counters cover
+	// OpenAI-compatible calls retaining the evaluation context, not every provider.
+	EmbeddingMeasurement JSON              `json:"embedding_measurement,omitempty"`
+	RetrievalMetrics     RetrievalMetrics  `json:"retrieval_metrics"`  // Retrieval performance metrics
+	GenerationMetrics    GenerationMetrics `json:"generation_metrics"` // Text generation quality metrics
 }
 
 // RetrievalMetrics contains metrics for retrieval evaluation

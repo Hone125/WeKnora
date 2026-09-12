@@ -14,6 +14,11 @@ name: Real Eval Quality Gate
 
 on:
   workflow_dispatch:
+    inputs:
+      regression_probe:
+        description: '真实退化实验：提高检索阈值，预期门禁失败；不修改成绩或基线'
+        type: boolean
+        default: false
   schedule:
     # 每周一 UTC 17:43（避开整点，错峰触发）
     - cron: "43 17 * * 1"
@@ -162,6 +167,11 @@ jobs:
           echo "✅ builtin_models.yaml 已生成"
 
       - name: Start server and run real evaluation + gate
+        env:
+          # Deliberately restrictive search configuration for an opt-in negative
+          # experiment. Normal PR/scheduled runs retain the committed config.
+          CONVERSATION_VECTOR_THRESHOLD: ${{ inputs.regression_probe && '2' || '' }}
+          CONVERSATION_KEYWORD_THRESHOLD: ${{ inputs.regression_probe && '1000000' || '' }}
         run: |
           export BUILTIN_MODELS_CONFIG=/tmp/weknora-ci/builtin_models.yaml
           mkdir -p /tmp/weknora-ci/files
