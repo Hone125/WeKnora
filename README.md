@@ -1,3 +1,10 @@
+> **本仓库包含「腾讯犀牛鸟开源人才培养计划 · 课题三 · 质量评测基线与成本可观测」的完整交付**
+> Eval Harness & 成本可观测：一条命令复现评测 · CI 质量门禁自动拦截指标退化 · 模型调用成本账本 · embedding 两级缓存 · 8 解析引擎横向基线
+> **→ 30 秒了解做了哪些工作：[RHINO-TOPIC3.md](./RHINO-TOPIC3.md)**
+> Tag `rhino-2026-final-3` ｜ 分支 `rhino-topic3` ｜ 14 commits · 94 files · +21,235 lines
+
+---
+
 <p align="center">
   <picture>
     <img src="./docs/images/logo.png" alt="WeKnora Logo" height="120"/>
