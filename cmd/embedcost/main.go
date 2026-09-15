@@ -131,7 +131,7 @@ func main() {
 
 	perChunk := float64(tokens) / float64(len(texts))
 	// 三个已实测的降幅（embedbench / cachebench）。
-	full := 1.0    // 完全重建：30 → 0，100%
+	full := 1.0                // 完全重建：30 → 0，100%
 	incremental := 20.0 / 30.0 // 增量重建：30 → 10，66.7%
 	// 省钱 = 命中省掉的 token × 单价（元/1M）。
 	saveFull := float64(tokens) * full * pricePerMillion / 1e6

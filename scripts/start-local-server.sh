@@ -2,7 +2,7 @@
 # 本地启动已编译的后端 server.exe，连本机 dev 基础设施（postgres/redis/docreader/langfuse）。
 #
 # 用途：验收 A 的「真实调用链」缓存实验 —— 用真实后端 + 真实 embedding provider
-# （SiliconFlow bge-m3）跑评测，观察 embedding_cache 表在冷/热/跨重启下的行数变化。
+# （SiliconFlow bge-m3）跑评测，读取 metric.embedding_measurement 的直接调用计数。
 #
 # 与 scripts/dev.sh start_app 的区别：dev.sh 用 `go run` 现场编译，本脚本直接跑
 # `bin/server.exe`（省去重复编译），便于反复「杀进程 → 重启」做跨重启实验。
@@ -35,4 +35,4 @@ mkdir -p "$LOCAL_STORAGE_BASE_DIR"
 # 3. 跑编译好的后端（前台，由调用方决定后台化/重定向日志）
 echo "[start-local-server] 启动后端，DB=$DB_HOST:${DB_PORT:-5432} REDIS=$REDIS_ADDR"
 echo "[start-local-server] EMBEDDING=$EMBEDDING_MODEL_NAME ($EMBEDDING_BASE_URL)"
-exec ./bin/server.exe
+exec "${SERVER_BINARY:-./bin/server.exe}"

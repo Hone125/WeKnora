@@ -100,13 +100,13 @@ func run(addr string) error {
 	defer c.Close()
 
 	type result struct {
-		Name          string  `json:"name"`
-		FileType      string  `json:"file_type"`
-		Error         string  `json:"error,omitempty"`
-		Output        string  `json:"output,omitempty"`
-		Coverage      float64 `json:"coverage,omitempty"`
-		Similarity    float64 `json:"similarity,omitempty"`
-		Structure     float64 `json:"structure_fidelity,omitempty"`
+		Name       string  `json:"name"`
+		FileType   string  `json:"file_type"`
+		Error      string  `json:"error,omitempty"`
+		Output     string  `json:"output,omitempty"`
+		Coverage   float64 `json:"coverage,omitempty"`
+		Similarity float64 `json:"similarity,omitempty"`
+		Structure  float64 `json:"structure_fidelity,omitempty"`
 	}
 
 	results := make([]result, 0, len(probes))

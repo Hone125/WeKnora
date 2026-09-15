@@ -30,4 +30,4 @@ jobs:
       - name: Test production cache wrappers and database ledger
         run: |
           export CGO_CFLAGS="-I${GITHUB_WORKSPACE}/third_party/sqlite"
-          go test ./internal/models/embedding ./internal/application/repository -run 'TestCache|TestMemCache|TestEncodeDecode|TestConcurrency|TestModelUsage' -count=1
+          go test ./internal/models/embedding ./internal/application/repository -run 'TestCache|TestMemCache|TestEncodeDecode|TestConcurrency|TestModelUsage|TestMeasurement' -count=1

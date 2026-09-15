@@ -44,6 +44,11 @@ func embeddingCacheSize() int {
 // 任何路径、任何租户算出的向量一致，天然可跨租户共享。
 func (c *cacheEmbedder) cacheKey(text string) string {
 	raw := fmt.Sprintf("%s\x00%d\x00%s", c.inner.GetModelID(), c.inner.GetDimensions(), text)
+	// An opt-in namespace isolates controlled experiments without deleting
+	// shared production cache entries. Empty preserves existing cache keys.
+	if c.namespace != "" {
+		raw = "namespace\x00" + c.namespace + "\x00" + raw
+	}
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
@@ -123,25 +128,30 @@ func (c *memCache) Set(key string, vector []float32) {
 // 它包在 concurrencyEmbedder 之外（见 embedder.go），因此缓存命中直接短路、
 // 不占 provider 并发配额；缓存未命中才进入 provider 往返。
 type cacheEmbedder struct {
-	inner Embedder
-	mem   *memCache
-	store EmbeddingCacheStore // 可能为 nil
+	inner     Embedder
+	mem       *memCache
+	store     EmbeddingCacheStore // 可能为 nil
+	namespace string
 }
 
 // lookup 依次查一级、二级缓存。二级未命中或 DB 出错都返回 ok=false，
 // 由调用方走真实 provider 调用（DB 错误降级、不阻断）。
 func (c *cacheEmbedder) lookup(ctx context.Context, key string) ([]float32, bool) {
 	if v, ok := c.mem.Get(key); ok {
+		measure(ctx, func(s *MeasurementSnapshot) { s.MemoryHits++ })
 		return v, true
 	}
 	if c.store == nil {
+		measure(ctx, func(s *MeasurementSnapshot) { s.CacheMisses++ })
 		return nil, false
 	}
 	raw, ok, err := c.store.Get(ctx, key)
 	if err != nil || !ok {
+		measure(ctx, func(s *MeasurementSnapshot) { s.CacheMisses++ })
 		return nil, false
 	}
 	v := decodeVector(raw)
+	measure(ctx, func(s *MeasurementSnapshot) { s.DatabaseHits++ })
 	c.mem.Set(key, v)
 	return v, true
 }
@@ -229,8 +239,9 @@ func wrapEmbeddingCache(e Embedder) Embedder {
 		return e
 	}
 	return &cacheEmbedder{
-		inner: e,
-		mem:   newMemCache(size),
-		store: CacheStore,
+		inner:     e,
+		mem:       newMemCache(size),
+		store:     CacheStore,
+		namespace: os.Getenv("EMBEDDING_CACHE_NAMESPACE"),
 	}
 }

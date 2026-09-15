@@ -11,6 +11,7 @@ import (
 
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/models/embedding"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/Tencent/WeKnora/internal/utils"
@@ -370,6 +371,22 @@ func (e *EvaluationService) Evaluation(ctx context.Context,
 // EvalDataset performs the actual evaluation of a dataset
 // Processes each QA pair in parallel and records metrics
 func (e *EvaluationService) EvalDataset(ctx context.Context, detail *types.EvaluationDetail, knowledgeBaseID string) error {
+	ctx, measurement := embedding.WithMeasurement(ctx)
+	defer func() {
+		// Stored inside the existing metric JSON, so restart readback retains it
+		// without a destructive schema change. Old records leave this field absent.
+		snapshot, marshalErr := json.Marshal(measurement.Snapshot())
+		if marshalErr != nil {
+			logger.Errorf(ctx, "Failed to serialize embedding measurement: %v", marshalErr)
+			return
+		}
+		e.evaluationMemoryStorage.update(detail.Task.ID, func(params *types.EvaluationDetail) {
+			if params.Metric == nil {
+				params.Metric = &types.MetricResult{}
+			}
+			params.Metric.EmbeddingMeasurement = types.JSON(snapshot)
+		})
+	}()
 	logger.Info(ctx, "Start evaluating dataset")
 	logger.Infof(ctx, "Task ID: %s, Dataset ID: %s", detail.Task.ID, detail.Task.DatasetID)
 
@@ -453,7 +470,7 @@ func (e *EvaluationService) EvalDataset(ctx context.Context, detail *types.Evalu
 
 			// Execute knowledge QA pipeline
 			logger.Infof(ctx, "Running knowledge QA for question: %s", qaPair.Question)
-			err = e.sessionService.KnowledgeQAByEvent(ctx, chatManage, types.Pipline["rag"])
+			err := e.sessionService.KnowledgeQAByEvent(ctx, chatManage, types.Pipline["rag"])
 			if err != nil {
 				logger.Errorf(ctx, "Failed to process question %d: %v", i, err)
 				return err
