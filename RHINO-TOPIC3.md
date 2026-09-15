@@ -2,7 +2,8 @@
 
 > 腾讯犀牛鸟开源人才培养计划 · WeKnora 开源实战课题（工程体系方向）
 > 交付版本：Tag `rhino-2026-final-3`（commit `af5880a8`）｜ 开发分支 `rhino-topic3`
-> 规模：**14 commits · 94 files · +21,235 行**（相对上游 `Tencent/WeKnora` 分叉点）
+> 规模：**23 commits · 103 files · +21,767 行**（基准：与上游 `Tencent/WeKnora` 的分叉点 `84a3599`；
+> 复核命令 `git diff --shortstat 84a3599..rhino-topic3`。本仓库 `main` 含同一份实现，便于直接浏览）
 
 ---
 
@@ -20,7 +21,7 @@
 | **M3①** embedding 两级缓存 | 进程内 LRU + DB 持久化，重建索引不再重复调 provider | `internal/models/embedding/cache.go`、PG `000093` / SQLite `000015` |
 | **M3②** prompt 前缀重排 | Wiki prompt 改为「固定指令前置、动态内容后置」，提升厂商前缀缓存命中率 | `internal/agent/prompts_wiki.go` |
 | **M4** CI 质量门禁 | 指标较基线退化超阈值 → CI 自动失败，并指出是哪几个指标退化了 | `internal/evalgate/`、`cmd/evalgate/`、`.github/workflows/eval-gate.yml` |
-| **M5** 解析引擎基线（选做） | 引擎无关的解析质量指标库 + 8 引擎横向对比 | `internal/parsequality/`、`cmd/parsebench/`、`cmd/builtinbench/`、`cmd/cloudbench/` |
+| **M5** 解析引擎基线（选做） | 引擎无关的解析质量指标库 + 支持 8 个解析引擎接入（本机实测 4 个） | `internal/parsequality/`、`cmd/parsebench/`、`cmd/builtinbench/`、`cmd/cloudbench/` |
 
 ---
 
@@ -44,32 +45,39 @@
 | 跨重启重建（仅靠 DB 二级缓存） | 30 | 0 | **100%** |
 
 云端 CI 在**正式评测调用链**上的直接计数（独立 workflow `topic3-cache-hit.yml`，同一进程连跑两遍 30 题，
-计数来自 `embedding_measurement`，不是缓存表行数、不是字节比例）：
+计数来自 `internal/models/embedding/measurement.go` 埋的计数器，不是缓存表行数、不是字节比例）：
 
-| 场景 | 真实 provider HTTP | memory_hits | database_hits | cache_misses |
+| 场景 | http_attempts（HTTP 调用次数） | memory_hits | database_hits | cache_misses（文本条数） |
 |---|---:|---:|---:|---:|
 | 冷缓存（第一遍） | 36 | 0 | 0 | 60 |
 | 热缓存（第二遍） | **0** | 0 | **60** | **0** |
 
+口径说明：这两列量的不是同一件事 —— `http_attempts` 是**HTTP 调用次数**，`cache_misses` 是**文本条数**；
+一次请求可携带多条文本，所以冷缓存那遍是「**60 条文本（30 语料 + 30 查询）落在 36 次 HTTP 调用里**」，
+两个数本来就不该相等。
+
 热缓存那遍 `memory_hits=0`、`database_hits=60`，说明命中**全部来自 DB 持久化二级缓存**
 ——即在正式调用链上证明了跨重启缓存的真实收益。
 
-### CI 门禁拦截退化 · 真实云端 CI 实验
+### CI 门禁拦截退化 · 真实云端 CI 负向实验
 
-把检索阈值拉高到合法上限 0.99 制造真实退化后跑完 30 题，门禁报 `passed=false`，
+用 `workflow_dispatch` 的 `regression_probe` 输入触发**负向实验**：把检索阈值（vector / keyword）拉高到
+0.99（config 合法范围内的高阈值）**人为构造退化**，真实环境（CI 起 postgres + redis + server）跑完
+30 题后，门禁报 `passed=false`，
 **6 个检索指标全部被判定退化并逐项报出**：recall 0.5→0.367、map/mrr 0.483→0.328、
 ndcg3/10 0.488→0.338、precision 0.108→0.08。
 
 门禁不依赖真实模型 Key 的自证路径也已就绪：退化 fixture → exit 1 并报
 `recall delta=-0.08 > tolerance 0.05`；基线 fixture → exit 0。
 
-### 厂商 prompt 前缀缓存 · SiliconFlow `deepseek-ai/DeepSeek-V3` 实测
+### 厂商 prompt 前缀缓存 · SiliconFlow `deepseek-ai/DeepSeek-V3` 实测（取中位数）
 
-读厂商返回的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`（**不是**前缀字节比例）：
+读厂商返回的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`（**不是**前缀字节比例；
+工具 `cmd/wikicachebench`，厂商未返回缓存字段时会标记「无法测量」）：
 
 | 场景 | 块顺序 | 命中率 |
 |---|---|---|
-| 重排后（现状） | 固定 instructions 前置 + chunks 后置 | **98.2%** |
+| 重排后（现状） | 固定 instructions 前置 + chunks 后置 | **98.2%**（中位数） |
 | 重排前（对照） | chunks 前置 + instructions 后置 | **0%** |
 
 ### 成本账本穿透
@@ -115,17 +123,18 @@ go build -o wikicachebench.exe ./cmd/wikicachebench && ./wikicachebench.exe .env
 
 ## 目录导航
 
-**先读这份** → `docs/rhino-topic3-final-report.md` · 结题报告（验收对照 + 模块详解 + 复现手册）
+**先读这份** → [`docs/rhino-topic3-final-report.md`](./docs/rhino-topic3-final-report.md) · 结题报告（验收对照 + 模块详解 + 复现手册）
 
 | 文档 | 内容 |
 |---|---|
-| `docs/rhino-topic3-plan.md` | 实施总纲 + 逐模块进度记录 |
-| `docs/rhino-topic3-baseline.md` | 改造前基线（P0 之前的现状） |
-| `docs/rhino-topic3-cache-experiment.md` | 缓存命中实验记录 |
-| `docs/rhino-topic3-real-eval-ci.md` | 真实检索评测接入 CI 的编排说明 |
-| `docs/rhino-topic3-evaluation-runner.md` | 评测运行器（eval-runner.mjs）操作说明 |
-| `docs/rhino-topic3-acceptance-audit.md` | 验收整改记录（含未达标项的如实标注） |
-| `docs/rhino-topic3-submission.md` | 提交手册与邮件模板 |
+| [`docs/rhino-topic3-plan.md`](./docs/rhino-topic3-plan.md) | 实施总纲 + 逐模块进度记录 |
+| [`docs/rhino-topic3-baseline.md`](./docs/rhino-topic3-baseline.md) | 改造前基线（P0 之前的现状） |
+| [`docs/rhino-topic3-cache-experiment.md`](./docs/rhino-topic3-cache-experiment.md) | 缓存命中实验记录 |
+| [`docs/rhino-topic3-optimization-20260912.md`](./docs/rhino-topic3-optimization-20260912.md) | 云端 CI 直接计数与负向实验的原始证据 |
+| [`docs/rhino-topic3-real-eval-ci.md`](./docs/rhino-topic3-real-eval-ci.md) | 真实检索评测接入 CI 的编排说明 |
+| [`docs/rhino-topic3-evaluation-runner.md`](./docs/rhino-topic3-evaluation-runner.md) | 评测运行器（eval-runner.mjs）操作说明 |
+| [`docs/rhino-topic3-acceptance-audit.md`](./docs/rhino-topic3-acceptance-audit.md) | 验收整改记录（含未达标项的如实标注） |
+| [`docs/rhino-topic3-submission.md`](./docs/rhino-topic3-submission.md) | 提交手册与邮件模板 |
 
 **核心代码**
 
@@ -155,4 +164,4 @@ go build -o wikicachebench.exe ./cmd/wikicachebench && ./wikicachebench.exe .env
 
 ---
 
-*过程与结论的完整证据链见 `docs/rhino-topic3-final-report.md`。*
+*过程与结论的完整证据链见 [`docs/rhino-topic3-final-report.md`](./docs/rhino-topic3-final-report.md)。*
